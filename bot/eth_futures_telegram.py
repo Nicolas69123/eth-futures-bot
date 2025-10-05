@@ -43,9 +43,14 @@ class ETHFuturesBot:
         self.VARIATION_THRESHOLD = 0.5  # 0.5% en 1 minute
         self.ALERT_COOLDOWN = 300     # 5 minutes entre alertes similaires
 
+        # Configuration affichage prix
+        self.PRICE_UPDATE_INTERVAL = 5  # Envoyer prix toutes les 5 secondes
+        self.last_price_update = time.time()
+
         # Stats
         self.start_time = datetime.now()
         self.alerts_sent = 0
+        self.price_updates_sent = 0
 
     def send_telegram(self, message):
         """
@@ -194,6 +199,43 @@ class ETHFuturesBot:
 
         return None
 
+    def send_price_update(self):
+        """
+        Envoie une mise à jour du prix toutes les 5 secondes
+        """
+        if not self.current_price:
+            return
+
+        current_time = time.time()
+        if current_time - self.last_price_update >= self.PRICE_UPDATE_INTERVAL:
+            # Calculer variation sur les dernières 5 secondes si possible
+            variation_5s = 0
+            if len(self.price_history) >= 5:
+                price_5s_ago = list(self.price_history)[-5]
+                variation_5s = ((self.current_price - price_5s_ago) / price_5s_ago) * 100
+
+            # Calculer variation 24h si disponible
+            variation_24h = 0
+            if len(self.price_history) > 1:
+                # Approximation avec l'historique disponible
+                first_price = self.price_history[0]
+                variation_24h = ((self.current_price - first_price) / first_price) * 100
+
+            trend = "📈" if variation_5s >= 0 else "📉"
+
+            message = f"""
+💰 <b>ETH/USDT Perpetual</b>
+
+Prix: <b>${self.current_price:,.2f}</b>
+{trend} 5s: {variation_5s:+.3f}%
+📊 Depuis démarrage: {variation_24h:+.2f}%
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+            if self.send_telegram(message):
+                self.price_updates_sent += 1
+            self.last_price_update = current_time
+
     def analyze_and_alert(self):
         """
         Analyse le prix et envoie des alertes si nécessaire
@@ -277,12 +319,15 @@ class ETHFuturesBot:
                     self.price_history.append(price)
                     self.price_1min.append(price)
 
+                    # Envoyer mise à jour prix toutes les 5 secondes
+                    self.send_price_update()
+
                     # Analyser et alerter
                     self.analyze_and_alert()
 
                     # Log console (silencieux)
                     if len(self.price_history) % 60 == 0:  # Toutes les minutes
-                        print(f"📊 Prix: ${price:,.2f} | Historique: {len(self.price_history)}s | Alertes: {self.alerts_sent}")
+                        print(f"📊 Prix: ${price:,.2f} | Historique: {len(self.price_history)}s | Alertes: {self.alerts_sent} | Updates: {self.price_updates_sent}")
 
         except Exception as e:
             print(f"❌ Erreur traitement message: {e}")
@@ -307,6 +352,8 @@ class ETHFuturesBot:
 📡 Connexion: MEXC Futures
 🎯 Paire: ETH/USDT Perpetual
 ⏱️  Analyse: Temps réel (1x/seconde)
+
+📊 <b>Mise à jour prix: Toutes les 5 secondes</b>
 
 🔔 <b>Alertes activées:</b>
 🔴 Crash: -2% en 15 min
