@@ -10,6 +10,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 from pathlib import Path
 import requests
+import hmac
+import base64
+import hashlib
+import json
 
 # Charger .env
 env_path = Path(__file__).parent.parent / '.env'
@@ -79,22 +83,19 @@ class BitgetHedgeBotV2:
             'enableRateLimit': True
         })
 
-        # Paires volatiles
+        # Paires volatiles (disponibles sur Bitget testnet)
         self.volatile_pairs = [
             'DOGE/USDT:USDT',
             'PEPE/USDT:USDT',
-            'SHIB/USDT:USDT',
-            'WIF/USDT:USDT',
-            'BONK/USDT:USDT',
-            'FLOKI/USDT:USDT'
+            'SHIB/USDT:USDT'
         ]
 
         self.available_pairs = self.volatile_pairs.copy()
 
         # Paramètres
-        self.INITIAL_MARGIN = 1  # 1$ de marge
-        self.LEVERAGE = 50  # Levier x50
-        self.MAX_CAPITAL = 100
+        self.INITIAL_MARGIN = 1  # 1€ de marge par position
+        self.LEVERAGE = 50  # Levier x50 (max sur Bitget testnet)
+        self.MAX_CAPITAL = 1000  # Capital max: 1000€
 
         # Positions actives
         self.active_positions = {}  # {pair: HedgePosition}
@@ -103,6 +104,16 @@ class BitgetHedgeBotV2:
         self.total_profit = 0
         self.capital_used = 0
         self.last_status_update = time.time()
+
+        # Historique des trades
+        self.pnl_history = []  # [{timestamp, pair, pnl, action}]
+
+        # Tracking des frais (SEULEMENT cette session)
+        self.total_fees_paid = 0
+        self.session_start_time = datetime.now()
+
+        # Telegram bot (commandes)
+        self.last_telegram_update_id = 0
 
     def send_telegram(self, message):
         """Envoie message Telegram"""
@@ -121,6 +132,151 @@ class BitgetHedgeBotV2:
             return response.status_code == 200
         except:
             return False
+
+    def get_telegram_updates(self):
+        """Récupère les nouveaux messages Telegram (commandes)"""
+        if not self.telegram_token:
+            return []
+
+        url = f"https://api.telegram.org/bot{self.telegram_token}/getUpdates"
+        params = {'offset': self.last_telegram_update_id + 1, 'timeout': 0}
+
+        try:
+            response = requests.get(url, params=params, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('ok') and data.get('result'):
+                    return data['result']
+        except:
+            pass
+
+        return []
+
+    def handle_telegram_command(self, command):
+        """Traite les commandes Telegram reçues"""
+
+        if command == '/pnl':
+            # Afficher P&L actuel
+            total_unrealized = 0
+            for pair in self.active_positions:
+                real_pos = self.get_real_positions(pair)
+                if real_pos:
+                    if real_pos.get('long'):
+                        total_unrealized += real_pos['long']['unrealized_pnl']
+                    if real_pos.get('short'):
+                        total_unrealized += real_pos['short']['unrealized_pnl']
+
+            total_fees = self.get_total_fees()
+            pnl_net = self.total_profit + total_unrealized - total_fees
+
+            message = f"""
+💰 <b>P&L SESSION</b>
+
+💵 P&L Réalisé: ${self.total_profit:+.2f}
+📊 P&L Non Réalisé: ${total_unrealized:+.2f}
+💸 Frais payés: ${total_fees:.2f}
+━━━━━━━━━━━━━━━━━
+💎 <b>P&L Net: ${pnl_net:+.2f}</b>
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+            self.send_telegram(message)
+
+        elif command == '/positions':
+            # Afficher seulement les positions ouvertes
+            if not self.active_positions:
+                self.send_telegram("⚠️ Aucune position active")
+                return
+
+            message_parts = ["📊 <b>POSITIONS OUVERTES</b>\n"]
+
+            for pair in self.active_positions:
+                real_pos = self.get_real_positions(pair)
+                price = self.get_price(pair)
+
+                if not real_pos or not price:
+                    continue
+
+                long_data = real_pos.get('long')
+                short_data = real_pos.get('short')
+
+                pair_name = pair.split('/')[0]
+                message_parts.append(f"\n<b>{pair_name}</b> - {self.format_price(price, pair)}")
+
+                if long_data:
+                    message_parts.append(f"\n📈 Long: {self.format_price(long_data['entry_price'], pair)} | P&L: ${long_data['unrealized_pnl']:+.2f}")
+
+                if short_data:
+                    message_parts.append(f"\n📉 Short: {self.format_price(short_data['entry_price'], pair)} | P&L: ${short_data['unrealized_pnl']:+.2f}")
+
+            message_parts.append(f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+            self.send_telegram("".join(message_parts))
+
+        elif command == '/history':
+            # Afficher historique des P&L
+            if not self.pnl_history:
+                self.send_telegram("📋 Aucun historique pour cette session")
+                return
+
+            message_parts = ["📋 <b>HISTORIQUE P&L</b>\n"]
+
+            for entry in self.pnl_history[-10:]:  # 10 derniers
+                timestamp = entry['timestamp'].strftime('%H:%M:%S')
+                pair = entry['pair'].split('/')[0]
+                pnl = entry['pnl']
+                action = entry['action']
+
+                message_parts.append(f"\n{timestamp} | {pair} | {action}: ${pnl:+.2f}")
+
+            message_parts.append(f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+            self.send_telegram("".join(message_parts))
+
+        elif command == '/balance':
+            # Afficher balance et capital
+            balance = self.MAX_CAPITAL - self.capital_used
+
+            message = f"""
+💰 <b>BALANCE</b>
+
+Capital total: ${self.MAX_CAPITAL:.0f}€
+Capital utilisé: ${self.capital_used:.0f}€
+Balance disponible: ${balance:.0f}€
+
+📊 Utilisation: {(self.capital_used / self.MAX_CAPITAL * 100):.1f}%
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+            self.send_telegram(message)
+
+        elif command == '/help':
+            message = """
+🤖 <b>COMMANDES DISPONIBLES</b>
+
+/pnl - P&L total de la session
+/positions - Positions ouvertes
+/history - Historique des 10 derniers trades
+/balance - Balance et capital disponible
+/help - Liste des commandes
+"""
+            self.send_telegram(message)
+
+    def check_telegram_commands(self):
+        """Vérifie et traite les commandes Telegram"""
+        updates = self.get_telegram_updates()
+
+        for update in updates:
+            # Mettre à jour l'ID
+            self.last_telegram_update_id = max(self.last_telegram_update_id, update.get('update_id', 0))
+
+            # Vérifier si c'est un message texte
+            message = update.get('message', {})
+            text = message.get('text', '')
+            chat_id = message.get('chat', {}).get('id')
+
+            # Vérifier que c'est bien notre chat
+            if str(chat_id) == str(self.telegram_chat_id) and text.startswith('/'):
+                print(f"📲 Commande reçue: {text}")
+                self.handle_telegram_command(text.strip())
 
     def get_price(self, symbol):
         """Récupère prix actuel"""
@@ -159,6 +315,246 @@ class BitgetHedgeBotV2:
             print(f"❌ Erreur positions {symbol}: {e}")
             return None
 
+    def format_price(self, price, pair):
+        """Formate le prix selon la paire (ex: PEPE/SHIB ont besoin de plus de décimales)"""
+        if price == 0:
+            return "$0.0000"
+
+        # Paires à petits prix (memecoins)
+        if any(coin in pair for coin in ['PEPE', 'SHIB', 'FLOKI', 'BONK']):
+            if price < 0.0001:
+                return f"${price:.8f}"
+            elif price < 0.01:
+                return f"${price:.6f}"
+
+        return f"${price:.4f}"
+
+    def round_price(self, price, pair):
+        """Arrondit le prix selon les règles Bitget (max décimales)"""
+        # PEPE/SHIB/FLOKI/BONK : 8 décimales max
+        if any(coin in pair for coin in ['PEPE', 'SHIB', 'FLOKI', 'BONK']):
+            return round(price, 8)
+
+        # DOGE et autres : 5 décimales max
+        return round(price, 5)
+
+    def verify_order_placed(self, order_id, symbol, max_retries=3):
+        """
+        Vérifie qu'un ordre a bien été placé sur l'exchange
+
+        Returns:
+            dict: Order data si succès, None si échec
+        """
+        for attempt in range(max_retries):
+            try:
+                time.sleep(0.5)  # Délai pour propagation
+                order = self.exchange.fetch_order(order_id, symbol)
+
+                # Vérifier que l'ordre est bien ouvert ou rempli
+                if order['status'] in ['open', 'closed']:
+                    return order
+                else:
+                    print(f"⚠️  Ordre {order_id[:8]}... statut inattendu: {order['status']}")
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️  Tentative {attempt+1}/{max_retries} vérification ordre: {e}")
+                    time.sleep(1)
+                else:
+                    print(f"❌ Échec vérification ordre {order_id[:8]}...: {e}")
+                    return None
+
+        return None
+
+    def calculate_breakeven_tp_price(self, position, real_pos_data, direction):
+        """
+        Calcule le prix de TP pour garantir un profit global positif
+
+        Args:
+            position: HedgePosition object
+            real_pos_data: Données réelles de la position depuis API
+            direction: 'up' (prix a monté) ou 'down' (prix a descendu)
+
+        Returns:
+            float: Prix du TP qui garantit profit
+        """
+        if direction == 'up':
+            # Le short a été doublé, on veut fermer avec profit
+            short_data = real_pos_data.get('short')
+            if not short_data:
+                return None
+
+            # Prix moyen du short après doublement
+            avg_entry = short_data['entry_price']
+
+            # Pour un short, profit si prix descend
+            # On veut au moins 0.5% de profit global
+            target_profit_pct = 0.5
+            tp_price = avg_entry * (1 - target_profit_pct / 100)
+
+            return tp_price
+
+        elif direction == 'down':
+            # Le long a été doublé, on veut fermer avec profit
+            long_data = real_pos_data.get('long')
+            if not long_data:
+                return None
+
+            # Prix moyen du long après doublement
+            avg_entry = long_data['entry_price']
+
+            # Pour un long, profit si prix monte
+            target_profit_pct = 0.5
+            tp_price = avg_entry * (1 + target_profit_pct / 100)
+
+            return tp_price
+
+        return None
+
+    def bitget_sign_request(self, timestamp, method, request_path, body=''):
+        """Génère la signature pour les requêtes API Bitget"""
+        message = str(timestamp) + method.upper() + request_path + body
+        mac = hmac.new(
+            self.api_secret.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256
+        )
+        return base64.b64encode(mac.digest()).decode()
+
+    def place_tpsl_order(self, symbol, plan_type, trigger_price, hold_side, size):
+        """
+        Place un vrai ordre TP/SL (plan order) sur Bitget via HTTP direct
+
+        Args:
+            symbol: Paire (ex: 'DOGE/USDT:USDT')
+            plan_type: 'profit_plan' (TP) ou 'loss_plan' (SL)
+            trigger_price: Prix de déclenchement
+            hold_side: 'long' ou 'short' (position à fermer)
+            size: Quantité
+
+        Returns:
+            dict: Order data ou None
+        """
+        try:
+            # Convertir symbol au format Bitget
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+
+            # Arrondir le prix selon les règles Bitget
+            trigger_price_rounded = self.round_price(trigger_price, symbol)
+
+            # Endpoint et body
+            endpoint = '/api/v2/mix/order/place-tpsl-order'
+            body = {
+                'marginCoin': 'USDT',
+                'productType': 'USDT-FUTURES',  # Majuscules
+                'symbol': symbol_bitget,
+                'planType': 'pos_profit' if plan_type == 'profit_plan' else 'pos_loss',  # pos_profit au lieu de profit_plan
+                'triggerPrice': str(trigger_price_rounded),
+                'triggerType': 'mark_price',
+                'executePrice': '0',  # 0 = ordre market au trigger
+                'holdSide': hold_side,
+                'size': str(int(size))
+            }
+            body_json = json.dumps(body)
+
+            # Timestamp et signature
+            timestamp = str(int(time.time() * 1000))
+            signature = self.bitget_sign_request(timestamp, 'POST', endpoint, body_json)
+
+            # Headers
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': self.api_password,
+                'Content-Type': 'application/json',
+                'locale': 'en-US',
+                'PAPTRADING': '1'
+            }
+
+            # Requête HTTP
+            url = f"https://api.bitget.com{endpoint}"
+            response = requests.post(url, headers=headers, data=body_json, timeout=10)
+            data = response.json()
+
+            if data.get('code') == '00000':
+                order_id = data.get('data', {}).get('orderId')
+                print(f"✅ TP/SL {plan_type} placé: ID {order_id}")
+                return {'id': order_id, 'info': data}
+            else:
+                print(f"❌ Erreur TP/SL API: {data}")
+                return None
+
+        except Exception as e:
+            print(f"❌ Erreur placement TP/SL: {e}")
+            return None
+
+    def get_tpsl_orders(self, symbol):
+        """Récupère les ordres TP/SL plan en cours via HTTP direct"""
+        try:
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+
+            # Endpoint (sans query params dans le path pour la signature)
+            endpoint_path = '/api/v2/mix/order/orders-plan-pending'
+            query_params = f'?productType=USDT-FUTURES'  # Sans planType (récupérer tous)
+
+            # Timestamp et signature
+            timestamp = str(int(time.time() * 1000))
+            signature = self.bitget_sign_request(timestamp, 'GET', endpoint_path + query_params, '')
+
+            # Headers
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': self.api_password,
+                'Content-Type': 'application/json',
+                'locale': 'en-US',
+                'PAPTRADING': '1'
+            }
+
+            # Requête HTTP
+            url = f"https://api.bitget.com{endpoint_path}{query_params}"
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+
+            if data.get('code') == '00000':
+                all_orders = data.get('data', {}).get('entrustedList', [])
+                # Filtrer par symbol
+                symbol_orders = [o for o in all_orders if o.get('symbol', '').lower() == symbol_bitget]
+                return symbol_orders
+            else:
+                print(f"⚠️ Réponse TP/SL: {data}")
+                return []
+
+        except Exception as e:
+            print(f"⚠️ Erreur récupération TP/SL: {e}")
+            return []
+
+    def get_total_fees(self):
+        """Récupère le total des frais payés depuis le démarrage du bot (session actuelle)"""
+        try:
+            total_fees = 0
+
+            # Timestamp de début de session (en millisecondes)
+            session_start_ms = int(self.session_start_time.timestamp() * 1000)
+
+            for pair in self.volatile_pairs:
+                try:
+                    # Récupérer les trades depuis le début de la session
+                    trades = self.exchange.fetch_my_trades(pair, since=session_start_ms, limit=100)
+                    for trade in trades:
+                        fee = trade.get('fee', {})
+                        if fee and fee.get('cost'):
+                            total_fees += float(fee['cost'])
+                except:
+                    pass
+
+            return total_fees
+
+        except Exception as e:
+            return 0
+
     def set_leverage(self, symbol, leverage):
         """Configure le levier"""
         try:
@@ -180,20 +576,68 @@ class BitgetHedgeBotV2:
             return False
 
     def cancel_order(self, order_id, symbol):
-        """Annule un ordre (ignore si ordre n'existe plus)"""
+        """Annule un ordre (LIMIT ou TP/SL plan)"""
+        # Essayer d'annuler comme ordre LIMIT standard
         try:
             self.exchange.cancel_order(order_id, symbol)
-            print(f"🗑️  Ordre {order_id[:8]}... annulé")
+            print(f"🗑️  Ordre LIMIT {order_id[:8]}... annulé")
             return True
         except Exception as e:
             error_msg = str(e)
-            # Ignorer si ordre n'existe pas/déjà exécuté (code 40768)
+            # Si ordre n'existe pas comme LIMIT, essayer comme TP/SL plan
             if '40768' in error_msg or 'does not exist' in error_msg.lower():
-                print(f"ℹ️  Ordre {order_id[:8]}... déjà exécuté/annulé")
-                return True
+                # Essayer d'annuler comme TP/SL plan
+                try:
+                    return self.cancel_tpsl_order(order_id, symbol)
+                except:
+                    print(f"ℹ️  Ordre {order_id[:8]}... déjà exécuté/annulé")
+                    return True
             else:
                 print(f"⚠️  Erreur annulation: {e}")
                 return False
+
+    def cancel_tpsl_order(self, order_id, symbol):
+        """Annule un ordre TP/SL plan"""
+        try:
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+
+            endpoint = '/api/v2/mix/order/cancel-plan-order'
+            body = {
+                'productType': 'USDT-FUTURES',  # Majuscules
+                'symbol': symbol_bitget,
+                'marginCoin': 'USDT',
+                'orderId': order_id,
+                'planType': 'pos_profit'  # pos_profit au lieu de profit_plan
+            }
+            body_json = json.dumps(body)
+
+            timestamp = str(int(time.time() * 1000))
+            signature = self.bitget_sign_request(timestamp, 'POST', endpoint, body_json)
+
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': self.api_password,
+                'Content-Type': 'application/json',
+                'locale': 'en-US',
+                'PAPTRADING': '1'
+            }
+
+            url = f"https://api.bitget.com{endpoint}"
+            response = requests.post(url, headers=headers, data=body_json, timeout=10)
+            data = response.json()
+
+            if data.get('code') == '00000':
+                print(f"🗑️  TP/SL {order_id[:8]}... annulé")
+                return True
+            else:
+                print(f"⚠️ Erreur annulation TP/SL: {data}")
+                return False
+
+        except Exception as e:
+            print(f"⚠️ Erreur annulation TP/SL: {e}")
+            return False
 
     def open_hedge_with_limit_orders(self, pair):
         """
@@ -224,13 +668,13 @@ class BitgetHedgeBotV2:
 
             long_order = self.exchange.create_order(
                 symbol=pair, type='market', side='buy', amount=size,
-                params={'tradeSide': 'open'}
+                params={'tradeSide': 'open', 'holdSide': 'long'}
             )
             print(f"✅ Long ouvert: {size:.4f}")
 
             short_order = self.exchange.create_order(
                 symbol=pair, type='market', side='sell', amount=size,
-                params={'tradeSide': 'open'}
+                params={'tradeSide': 'open', 'holdSide': 'short'}
             )
             print(f"✅ Short ouvert: {size:.4f}")
 
@@ -245,14 +689,18 @@ class BitgetHedgeBotV2:
             entry_long = real_pos['long']['entry_price']
             entry_short = real_pos['short']['entry_price']
 
-            print(f"📊 Prix entrée Long (API): ${entry_long:.4f}")
-            print(f"📊 Prix entrée Short (API): ${entry_short:.4f}")
+            print(f"📊 Prix entrée Long (API): {self.format_price(entry_long, pair)}")
+            print(f"📊 Prix entrée Short (API): {self.format_price(entry_short, pair)}")
 
             # Créer position tracking
             position = HedgePosition(pair, self.INITIAL_MARGIN, entry_long, entry_short)
             self.active_positions[pair] = position
 
-            # 2. Placer les 4 ordres limites
+            # Attendre 3s avant de placer les TP (Bitget refuse si trop rapide)
+            print("\n⏳ Attente 3s avant placement TP...")
+            time.sleep(3)
+
+            # 2. Placer les 4 ordres limites avec vérification
             print("\n2️⃣ Placement des 4 ordres limites...")
 
             next_trigger_pct = position.get_next_trigger_pct()
@@ -260,43 +708,98 @@ class BitgetHedgeBotV2:
                 print("❌ Pas de niveau Fibonacci")
                 return False
 
+            # Récupérer le prix actuel du marché MAINTENANT
+            current_market_price = self.get_price(pair)
+
+            print(f"\n🔍 DEBUG PLACEMENT ORDRES:")
+            print(f"   Prix entrée Long (API): {self.format_price(entry_long, pair)}")
+            print(f"   Prix entrée Short (API): {self.format_price(entry_short, pair)}")
+            print(f"   Prix marché ACTUEL: {self.format_price(current_market_price, pair)}")
+            print(f"   Variation depuis entrée: {((current_market_price - entry_long) / entry_long * 100):+.4f}%")
+
             # Calculer prix des triggers
             tp_long_price = entry_long * (1 + next_trigger_pct / 100)
             tp_short_price = entry_short * (1 - next_trigger_pct / 100)
             double_short_price = tp_long_price  # MÊME PRIX que TP Long
             double_long_price = tp_short_price  # MÊME PRIX que TP Short
 
-            # a) TP Long (fermer long si prix monte)
-            tp_long_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='sell', amount=size, price=tp_long_price,
-                params={'tradeSide': 'close'}
-            )
-            position.orders['tp_long'] = tp_long_order['id']
-            print(f"📝 TP Long @ ${tp_long_price:.4f} (+{next_trigger_pct}%)")
+            print(f"\n   Ordres qui vont être placés:")
+            print(f"   TP Long @ {self.format_price(tp_long_price, pair)} (+{next_trigger_pct}%)")
+            print(f"   TP Short @ {self.format_price(tp_short_price, pair)} (-{next_trigger_pct}%)")
+            print(f"   Distance TP Long: {((tp_long_price - current_market_price) / current_market_price * 100):+.4f}%")
+            print(f"   Distance TP Short: {((tp_short_price - current_market_price) / current_market_price * 100):+.4f}%")
+
+            # a) TP Long (VRAI ordre TP/SL Bitget)
+            try:
+                tp_long_order = self.place_tpsl_order(
+                    symbol=pair,
+                    plan_type='profit_plan',
+                    trigger_price=tp_long_price,
+                    hold_side='long',
+                    size=size
+                )
+                if tp_long_order and tp_long_order.get('id'):
+                    position.orders['tp_long'] = tp_long_order['id']
+                    print(f"✅ TP Long (VRAI TP) @ {self.format_price(tp_long_price, pair)} (+{next_trigger_pct}%)")
+                else:
+                    print(f"❌ Échec placement TP Long")
+                    return False
+            except Exception as e:
+                print(f"❌ Erreur TP Long: {e}")
+                return False
 
             # b) Doubler Short (si prix monte - MÊME PRIX)
-            double_short_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='sell', amount=size * 2, price=double_short_price,
-                params={'tradeSide': 'open'}
-            )
-            position.orders['double_short'] = double_short_order['id']
-            print(f"📝 Doubler Short @ ${double_short_price:.4f}")
+            try:
+                double_short_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='sell', amount=size * 2, price=double_short_price,
+                    params={'tradeSide': 'open', 'holdSide': 'short'}  # Ouvrir SHORT
+                )
+                verified = self.verify_order_placed(double_short_order['id'], pair)
+                if verified:
+                    position.orders['double_short'] = double_short_order['id']
+                    print(f"✅ Doubler Short @ {self.format_price(double_short_price, pair)}")
+                else:
+                    print(f"❌ Échec placement Doubler Short")
+                    return False
+            except Exception as e:
+                print(f"❌ Erreur Doubler Short: {e}")
+                return False
 
-            # c) TP Short (fermer short si prix descend)
-            tp_short_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='buy', amount=size, price=tp_short_price,
-                params={'tradeSide': 'close'}
-            )
-            position.orders['tp_short'] = tp_short_order['id']
-            print(f"📝 TP Short @ ${tp_short_price:.4f} (-{next_trigger_pct}%)")
+            # c) TP Short (VRAI ordre TP/SL Bitget)
+            try:
+                tp_short_order = self.place_tpsl_order(
+                    symbol=pair,
+                    plan_type='profit_plan',
+                    trigger_price=tp_short_price,
+                    hold_side='short',
+                    size=size
+                )
+                if tp_short_order and tp_short_order.get('id'):
+                    position.orders['tp_short'] = tp_short_order['id']
+                    print(f"✅ TP Short (VRAI TP) @ {self.format_price(tp_short_price, pair)} (-{next_trigger_pct}%)")
+                else:
+                    print(f"❌ Échec placement TP Short")
+                    return False
+            except Exception as e:
+                print(f"❌ Erreur TP Short: {e}")
+                return False
 
             # d) Doubler Long (si prix descend - MÊME PRIX)
-            double_long_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='buy', amount=size * 2, price=double_long_price,
-                params={'tradeSide': 'open'}
-            )
-            position.orders['double_long'] = double_long_order['id']
-            print(f"📝 Doubler Long @ ${double_long_price:.4f}")
+            try:
+                double_long_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=size * 2, price=double_long_price,
+                    params={'tradeSide': 'open', 'holdSide': 'long'}  # Ouvrir LONG
+                )
+                verified = self.verify_order_placed(double_long_order['id'], pair)
+                if verified:
+                    position.orders['double_long'] = double_long_order['id']
+                    print(f"✅ Doubler Long @ {self.format_price(double_long_price, pair)}")
+                else:
+                    print(f"❌ Échec placement Doubler Long")
+                    return False
+            except Exception as e:
+                print(f"❌ Erreur Doubler Long: {e}")
+                return False
 
             self.capital_used += self.INITIAL_MARGIN * 2
             self.available_pairs.remove(pair)
@@ -305,17 +808,17 @@ class BitgetHedgeBotV2:
             message = f"""
 🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>
 
-📈 Long: ${entry_long:.4f}
-📉 Short: ${entry_short:.4f}
+📈 Long: {self.format_price(entry_long, pair)}
+📉 Short: {self.format_price(entry_short, pair)}
 ⚡ Levier: x{self.LEVERAGE}
 
 📝 <b>Ordres limites placés:</b>
 
-⬆️ Si hausse +{next_trigger_pct}% (${tp_long_price:.4f}):
+⬆️ Si hausse +{next_trigger_pct}% ({self.format_price(tp_long_price, pair)}):
    → TP Long
    → Doubler Short
 
-⬇️ Si baisse -{next_trigger_pct}% (${tp_short_price:.4f}):
+⬇️ Si baisse -{next_trigger_pct}% ({self.format_price(tp_short_price, pair)}):
    → TP Short
    → Doubler Long
 
@@ -329,35 +832,76 @@ class BitgetHedgeBotV2:
             print(f"❌ Erreur ouverture: {e}")
             return False
 
-    def check_orders_status(self):
-        """Vérifie l'état des ordres limites et annule si nécessaire"""
+    def check_orders_status(self, iteration=0):
+        """Vérifie l'état des ordres (LIMIT + TP/SL plan)"""
 
         for pair, position in list(self.active_positions.items()):
             try:
-                # Récupérer tous les ordres ouverts sur cette paire
-                open_orders = self.exchange.fetch_open_orders(pair)
+                # Vérifier si TP Long exécuté (par disparition de position)
+                tp_long_executed = False
+                if position.orders['tp_long'] and position.long_open:
+                    # Vérifier si la position Long existe encore
+                    real_pos = self.get_real_positions(pair)
+                    if not real_pos or not real_pos.get('long'):
+                        print(f"   ✅ TP Long EXÉCUTÉ (position fermée)")
+                        tp_long_executed = True
+                    else:
+                        # Position existe encore, TP pas encore atteint
+                        if iteration % 30 == 0:  # Log toutes les 30s
+                            print(f"   ⏳ TP Long en attente")
 
-                # Vérifier quels ordres de position sont encore actifs
-                active_order_ids = [order['id'] for order in open_orders]
-
-                # Vérifier si TP Long exécuté (n'est plus dans ordres ouverts)
-                tp_long_executed = (position.orders['tp_long'] and
-                                    position.orders['tp_long'] not in active_order_ids)
-
-                # Vérifier si TP Short exécuté
-                tp_short_executed = (position.orders['tp_short'] and
-                                     position.orders['tp_short'] not in active_order_ids)
+                # Vérifier si TP Short exécuté (par disparition de position)
+                tp_short_executed = False
+                if position.orders['tp_short'] and position.short_open:
+                    # Vérifier si la position Short existe encore
+                    real_pos = self.get_real_positions(pair) if not tp_long_executed else self.get_real_positions(pair)
+                    if not real_pos or not real_pos.get('short'):
+                        print(f"   ✅ TP Short EXÉCUTÉ (position fermée)")
+                        tp_short_executed = True
+                    else:
+                        # Position existe encore, TP pas encore atteint
+                        if iteration % 30 == 0:  # Log toutes les 30s
+                            print(f"   ⏳ TP Short en attente")
 
                 # TP LONG EXÉCUTÉ (prix a monté)
-                if tp_long_executed and position.long_open:
-                    print(f"\n🔔 TP LONG EXÉCUTÉ - {pair}")
+                if tp_long_executed:
+                    print(f"\n{'='*80}")
+                    print(f"🔔 TP LONG EXÉCUTÉ - {pair}")
+                    print(f"{'='*80}")
+
+                    # Afficher le prix actuel et calcul de variation
+                    current_price = self.get_price(pair)
+                    if current_price:
+                        entry = position.entry_price_long
+                        variation = ((current_price - entry) / entry) * 100
+                        print(f"   Prix entrée Long: {self.format_price(entry, pair)}")
+                        print(f"   Prix actuel: {self.format_price(current_price, pair)}")
+                        print(f"   Variation réelle: {variation:+.4f}%")
+
                     position.long_open = False
+
+                    # Récupérer P&L réel du Long fermé
+                    real_pos_after = self.get_real_positions(pair)
+                    long_profit = 0
+                    if real_pos_after and real_pos_after.get('long'):
+                        # Le long n'existe plus, mais on peut estimer le profit
+                        long_profit = variation * self.INITIAL_MARGIN / 100  # Approximation
+
+                    # Enregistrer dans l'historique
+                    self.pnl_history.append({
+                        'timestamp': datetime.now(),
+                        'pair': pair,
+                        'pnl': long_profit,
+                        'action': 'TP Long'
+                    })
 
                     # Annuler ordres du côté opposé
                     if position.orders['tp_short']:
                         self.cancel_order(position.orders['tp_short'], pair)
+                        position.orders['tp_short'] = None
                     if position.orders['double_long']:
                         self.cancel_order(position.orders['double_long'], pair)
+                        position.orders['double_long'] = None
 
                     # Replacer ordres au niveau Fibonacci suivant
                     position.current_level += 1
@@ -367,15 +911,44 @@ class BitgetHedgeBotV2:
                     self.open_next_hedge()
 
                 # TP SHORT EXÉCUTÉ (prix a descendu)
-                elif tp_short_executed and position.short_open:
-                    print(f"\n🔔 TP SHORT EXÉCUTÉ - {pair}")
+                elif tp_short_executed:
+                    print(f"\n{'='*80}")
+                    print(f"🔔 TP SHORT EXÉCUTÉ - {pair}")
+                    print(f"{'='*80}")
+
+                    # Afficher le prix actuel et calcul de variation
+                    current_price = self.get_price(pair)
+                    if current_price:
+                        entry = position.entry_price_short
+                        variation = ((current_price - entry) / entry) * 100
+                        print(f"   Prix entrée Short: {self.format_price(entry, pair)}")
+                        print(f"   Prix actuel: {self.format_price(current_price, pair)}")
+                        print(f"   Variation réelle: {variation:+.4f}%")
+
                     position.short_open = False
+
+                    # Récupérer P&L réel du Short fermé
+                    short_profit = 0
+                    if current_price:
+                        entry = position.entry_price_short
+                        variation = ((current_price - entry) / entry) * 100
+                        short_profit = -variation * self.INITIAL_MARGIN / 100  # Négatif car short profite de la baisse
+
+                    # Enregistrer dans l'historique
+                    self.pnl_history.append({
+                        'timestamp': datetime.now(),
+                        'pair': pair,
+                        'pnl': short_profit,
+                        'action': 'TP Short'
+                    })
 
                     # Annuler ordres du côté opposé
                     if position.orders['tp_long']:
                         self.cancel_order(position.orders['tp_long'], pair)
+                        position.orders['tp_long'] = None
                     if position.orders['double_short']:
                         self.cancel_order(position.orders['double_short'], pair)
+                        position.orders['double_short'] = None
 
                     # Replacer ordres au niveau Fibonacci suivant
                     position.current_level += 1
@@ -388,7 +961,10 @@ class BitgetHedgeBotV2:
                 print(f"⚠️  Erreur vérification ordres {pair}: {e}")
 
     def place_next_level_orders(self, pair, position, direction):
-        """Place les ordres pour le prochain niveau Fibonacci"""
+        """
+        Place les ordres pour le prochain niveau Fibonacci
+        Place à la fois le doublement ET le nouveau TP pour garantir profit
+        """
 
         next_trigger = position.get_next_trigger_pct()
         if not next_trigger:
@@ -401,45 +977,103 @@ class BitgetHedgeBotV2:
 
         print(f"\n📝 Placement ordres niveau Fibonacci {position.current_level} (+{next_trigger}%)")
 
-        if direction == 'up':  # Prix a monté
-            # Il reste seulement le SHORT
+        if direction == 'up':  # Prix a monté → Il reste seulement le SHORT
             short_data = real_pos.get('short')
             if not short_data:
+                print("❌ Aucune position Short trouvée")
                 return
 
-            entry = short_data['entry_price']
-            size = short_data['size']
+            current_size = short_data['size']
+            current_entry = short_data['entry_price']
 
-            # Nouveau prix trigger
-            new_trigger_price = position.entry_price_short * (1 + next_trigger / 100)
+            # 1. Calculer prix du prochain doublement (niveau Fibonacci suivant)
+            new_double_price = position.entry_price_short * (1 + next_trigger / 100)
 
-            # Placer ordre doubler short au nouveau niveau
-            double_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='sell', amount=size * 2,
-                price=new_trigger_price, params={'tradeSide': 'open'}
-            )
-            position.orders['double_short'] = double_order['id']
-            print(f"📝 Doubler Short @ ${new_trigger_price:.4f}")
+            # 2. Calculer prix du nouveau TP qui garantit profit
+            tp_price = self.calculate_breakeven_tp_price(position, real_pos, 'up')
+            if not tp_price:
+                # Fallback: -0.5% du prix moyen actuel
+                tp_price = current_entry * 0.995
 
-        elif direction == 'down':  # Prix a descendu
-            # Il reste seulement le LONG
+            # 3. Placer ordre DOUBLER SHORT au niveau Fibonacci
+            try:
+                double_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='sell', amount=current_size * 2,
+                    price=new_double_price, params={'tradeSide': 'open'}
+                )
+                verified = self.verify_order_placed(double_order['id'], pair)
+                if verified:
+                    position.orders['double_short'] = double_order['id']
+                    print(f"✅ Doubler Short @ {self.format_price(new_double_price, pair)} (+{next_trigger}%)")
+                else:
+                    print(f"❌ Échec placement Doubler Short")
+            except Exception as e:
+                print(f"❌ Erreur Doubler Short: {e}")
+
+            # 4. Placer nouveau TP SHORT (fermeture avec profit)
+            try:
+                tp_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=current_size,
+                    price=tp_price, params={'tradeSide': 'close'}
+                )
+                verified = self.verify_order_placed(tp_order['id'], pair)
+                if verified:
+                    position.orders['tp_short'] = tp_order['id']
+                    profit_pct = ((current_entry - tp_price) / current_entry) * 100
+                    print(f"✅ Nouveau TP Short @ {self.format_price(tp_price, pair)} ({profit_pct:+.2f}%)")
+                else:
+                    print(f"❌ Échec placement TP Short")
+            except Exception as e:
+                print(f"❌ Erreur TP Short: {e}")
+
+        elif direction == 'down':  # Prix a descendu → Il reste seulement le LONG
             long_data = real_pos.get('long')
             if not long_data:
+                print("❌ Aucune position Long trouvée")
                 return
 
-            entry = long_data['entry_price']
-            size = long_data['size']
+            current_size = long_data['size']
+            current_entry = long_data['entry_price']
 
-            # Nouveau prix trigger
-            new_trigger_price = position.entry_price_long * (1 - next_trigger / 100)
+            # 1. Calculer prix du prochain doublement
+            new_double_price = position.entry_price_long * (1 - next_trigger / 100)
 
-            # Placer ordre doubler long au nouveau niveau
-            double_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='buy', amount=size * 2,
-                price=new_trigger_price, params={'tradeSide': 'open'}
-            )
-            position.orders['double_long'] = double_order['id']
-            print(f"📝 Doubler Long @ ${new_trigger_price:.4f}")
+            # 2. Calculer prix du nouveau TP qui garantit profit
+            tp_price = self.calculate_breakeven_tp_price(position, real_pos, 'down')
+            if not tp_price:
+                # Fallback: +0.5% du prix moyen actuel
+                tp_price = current_entry * 1.005
+
+            # 3. Placer ordre DOUBLER LONG au niveau Fibonacci
+            try:
+                double_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=current_size * 2,
+                    price=new_double_price, params={'tradeSide': 'open'}
+                )
+                verified = self.verify_order_placed(double_order['id'], pair)
+                if verified:
+                    position.orders['double_long'] = double_order['id']
+                    print(f"✅ Doubler Long @ {self.format_price(new_double_price, pair)} (-{next_trigger}%)")
+                else:
+                    print(f"❌ Échec placement Doubler Long")
+            except Exception as e:
+                print(f"❌ Erreur Doubler Long: {e}")
+
+            # 4. Placer nouveau TP LONG (fermeture avec profit)
+            try:
+                tp_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='sell', amount=current_size,
+                    price=tp_price, params={'tradeSide': 'close'}
+                )
+                verified = self.verify_order_placed(tp_order['id'], pair)
+                if verified:
+                    position.orders['tp_long'] = tp_order['id']
+                    profit_pct = ((tp_price - current_entry) / current_entry) * 100
+                    print(f"✅ Nouveau TP Long @ {self.format_price(tp_price, pair)} ({profit_pct:+.2f}%)")
+                else:
+                    print(f"❌ Échec placement TP Long")
+            except Exception as e:
+                print(f"❌ Erreur TP Long: {e}")
 
     def open_next_hedge(self):
         """Ouvre un nouveau hedge sur la prochaine paire disponible"""
@@ -450,9 +1084,9 @@ class BitgetHedgeBotV2:
             self.open_hedge_with_limit_orders(next_pair)
 
     def send_status_telegram(self):
-        """Envoie status sur Telegram toutes les 30s"""
+        """Envoie status détaillé sur Telegram toutes les 60s (1 minute)"""
         current_time = time.time()
-        if current_time - self.last_status_update < 30:
+        if current_time - self.last_status_update < 60:  # 1 minute
             return
 
         if not self.active_positions:
@@ -463,42 +1097,79 @@ class BitgetHedgeBotV2:
 
         for pair, pos in self.active_positions.items():
             real_pos = self.get_real_positions(pair)
-            price = self.get_price(pair)
+            current_price = self.get_price(pair)
 
-            if not real_pos or not price:
+            if not real_pos or not current_price:
                 continue
 
             long_data = real_pos.get('long')
             short_data = real_pos.get('short')
 
-            pair_msg = f"\n🎯 <b>{pair.split('/')[0]}</b> - ${price:.4f}\n"
+            # En-tête de la paire avec prix actuel
+            pair_name = pair.split('/')[0]
+            pair_msg = f"\n━━━━━━━━━━━━━━━━━\n"
+            pair_msg += f"<b>{pair_name}</b>\n"
+            pair_msg += f"💰 Prix actuel: {self.format_price(current_price, pair)}\n"
 
+            # LONG (si ouvert)
             if long_data:
                 pnl = long_data['unrealized_pnl']
                 total_pnl += pnl
+                entry_long = long_data['entry_price']
+
+                # Calcul variation % par rapport au prix d'entrée MARKET
+                variation_pct = ((current_price - entry_long) / entry_long) * 100
+
+                pair_msg += f"\n📈 <b>LONG</b> (Hedge)\n"
+                pair_msg += f"   Entrée: {self.format_price(entry_long, pair)}\n"
+                pair_msg += f"   Variation: {variation_pct:+.2f}%\n"
+                pair_msg += f"   P&L: ${pnl:+.2f} (ROE: {long_data['pnl_percentage']:+.1f}%)\n"
+
+                # Afficher TP
                 next_trigger = pos.get_next_trigger_pct()
-                next_price = pos.entry_price_long * (1 + next_trigger / 100) if next_trigger else 0
-
-                pair_msg += f"📈 Long: ${long_data['entry_price']:.4f}\n"
-                pair_msg += f"   P&L: ${pnl:+.2f}\n"
                 if next_trigger:
-                    pair_msg += f"   🎯 TP @ ${next_price:.4f} (+{next_trigger}%)\n"
+                    next_price = pos.entry_price_long * (1 + next_trigger / 100)
+                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (+{next_trigger}%)\n"
 
+            # SHORT (si ouvert)
             if short_data:
                 pnl = short_data['unrealized_pnl']
                 total_pnl += pnl
-                next_trigger = pos.get_next_trigger_pct()
-                next_price = pos.entry_price_short * (1 - next_trigger / 100) if next_trigger else 0
+                entry_short = short_data['entry_price']
 
-                pair_msg += f"📉 Short: ${short_data['entry_price']:.4f}\n"
-                pair_msg += f"   P&L: ${pnl:+.2f}\n"
-                pair_msg += f"   Liq: ${short_data['liquidation_price']:.4f}\n"
+                # Calcul variation % par rapport au prix d'entrée MARKET
+                variation_pct = ((current_price - entry_short) / entry_short) * 100
+
+                pair_msg += f"\n📉 <b>SHORT</b> (Hedge)\n"
+                pair_msg += f"   Entrée: {self.format_price(entry_short, pair)}\n"
+                pair_msg += f"   Variation: {variation_pct:+.2f}%\n"
+                pair_msg += f"   P&L: ${pnl:+.2f} (ROE: {short_data['pnl_percentage']:+.1f}%)\n"
+                pair_msg += f"   💀 Liq: {self.format_price(short_data['liquidation_price'], pair)}\n"
+
+                # Afficher TP
+                next_trigger = pos.get_next_trigger_pct()
                 if next_trigger:
-                    pair_msg += f"   🎯 TP @ ${next_price:.4f} (-{next_trigger}%)\n"
+                    next_price = pos.entry_price_short * (1 - next_trigger / 100)
+                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (-{next_trigger}%)\n"
 
             message_parts.append(pair_msg)
 
+        # Récupérer les frais totaux
+        total_fees = self.get_total_fees()
+        self.total_fees_paid = total_fees
+
+        # Footer avec balance et frais
+        balance_available = self.MAX_CAPITAL - self.capital_used
+        usage_pct = (self.capital_used / self.MAX_CAPITAL * 100)
+        pnl_net = total_pnl + self.total_profit - total_fees
+
+        message_parts.append(f"\n━━━━━━━━━━━━━━━━━")
         message_parts.append(f"\n💰 P&L Total: ${total_pnl + self.total_profit:+.2f}")
+        message_parts.append(f"\n💸 Frais payés: ${total_fees:.2f}")
+        message_parts.append(f"\n💎 <b>P&L Net: ${pnl_net:+.2f}</b>")
+        message_parts.append(f"\n━━━━━━━━━━━━━━━━━")
+        message_parts.append(f"\n📊 Positions: {len(self.active_positions)}")
+        message_parts.append(f"\n💵 Balance: ${balance_available:.0f}€ / ${self.MAX_CAPITAL:.0f}€ ({usage_pct:.1f}% utilisé)")
         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
 
         self.send_telegram("".join(message_parts))
@@ -522,9 +1193,9 @@ class BitgetHedgeBotV2:
             startup = f"""
 🤖 <b>BOT HEDGE V2 DÉMARRÉ</b>
 
-💰 Capital: ${self.MAX_CAPITAL}
+💰 Capital: ${self.MAX_CAPITAL}€
 ⚡ Levier: x{self.LEVERAGE}
-📊 Marge initiale: ${self.INITIAL_MARGIN}
+📊 Marge initiale: ${self.INITIAL_MARGIN}€
 
 📝 <b>Système ordres limites:</b>
 ✅ TP + Doublement automatique
@@ -532,6 +1203,15 @@ class BitgetHedgeBotV2:
 ✅ Fibonacci: 1%, 2%, 4%, 7%, 12%...
 
 Paires: {', '.join([p.split('/')[0] for p in self.volatile_pairs])}
+
+📲 <b>Commandes disponibles:</b>
+/pnl - P&L total
+/positions - Positions ouvertes
+/balance - Balance disponible
+/history - Historique trades
+/help - Aide commandes
+
+📊 Status auto: Toutes les 1 min
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
@@ -544,8 +1224,50 @@ Paires: {', '.join([p.split('/')[0] for p in self.volatile_pairs])}
             # Boucle
             iteration = 0
             while True:
+                # DEBUG: Afficher prix en temps réel
+                if self.active_positions:
+                    print(f"\n{'='*80}")
+                    print(f"🔍 DEBUG - Itération {iteration} - {datetime.now().strftime('%H:%M:%S')}")
+                    print(f"{'='*80}")
+
+                    for pair, position in self.active_positions.items():
+                        current_price = self.get_price(pair)
+                        if not current_price:
+                            continue
+
+                        print(f"\n📊 {pair}")
+                        print(f"   Prix actuel: {self.format_price(current_price, pair)}")
+
+                        # Long (si ouvert)
+                        if position.long_open:
+                            entry_long = position.entry_price_long
+                            change_pct = ((current_price - entry_long) / entry_long) * 100
+                            next_trigger = position.get_next_trigger_pct()
+
+                            print(f"   📈 LONG:")
+                            print(f"      Prix entrée: {self.format_price(entry_long, pair)}")
+                            print(f"      Variation: {change_pct:+.4f}%")
+                            print(f"      Trigger: +{next_trigger}%")
+                            print(f"      Distance trigger: {(next_trigger - change_pct):.4f}%")
+
+                        # Short (si ouvert)
+                        if position.short_open:
+                            entry_short = position.entry_price_short
+                            change_pct = ((current_price - entry_short) / entry_short) * 100
+                            next_trigger = position.get_next_trigger_pct()
+
+                            print(f"   📉 SHORT:")
+                            print(f"      Prix entrée: {self.format_price(entry_short, pair)}")
+                            print(f"      Variation: {change_pct:+.4f}%")
+                            print(f"      Trigger baisse: -{next_trigger}%")
+                            print(f"      Distance trigger: {(abs(change_pct) - next_trigger):.4f}%")
+
                 # Vérifier ordres exécutés
-                self.check_orders_status()
+                self.check_orders_status(iteration)
+
+                # Vérifier commandes Telegram (toutes les 2 secondes)
+                if iteration % 2 == 0:
+                    self.check_telegram_commands()
 
                 # Status Telegram
                 self.send_status_telegram()
