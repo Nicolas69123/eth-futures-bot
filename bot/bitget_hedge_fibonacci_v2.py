@@ -66,6 +66,11 @@ class BitgetHedgeBotV2:
         self.api_secret = os.getenv('BITGET_SECRET')
         self.api_password = os.getenv('BITGET_PASSPHRASE')
 
+        # Debug: Vérifier si les clés sont chargées
+        print(f"🔑 API Key chargée: {'✅' if self.api_key else '❌'} (longueur: {len(self.api_key) if self.api_key else 0})")
+        print(f"🔑 Secret chargé: {'✅' if self.api_secret else '❌'} (longueur: {len(self.api_secret) if self.api_secret else 0})")
+        print(f"🔑 Passphrase chargée: {'✅' if self.api_password else '❌'}")
+
         # Telegram
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
