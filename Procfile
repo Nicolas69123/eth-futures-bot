@@ -1,1 +1,1 @@
-worker: python bot/eth_futures_telegram.py
+worker: python bot/bitget_hedge_fibonacci_v2.py
