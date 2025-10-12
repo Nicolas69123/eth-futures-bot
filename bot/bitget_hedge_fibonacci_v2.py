@@ -153,12 +153,33 @@ class BitgetHedgeBotV2:
         self.session_start_time = datetime.now()
 
         # Telegram bot (commandes)
-        self.last_telegram_update_id = 0
+        self.last_telegram_update_id = self.load_last_update_id()
+        self.startup_time = time.time()  # Pour ignorer vieux messages au démarrage
 
         # Vérification automatique
         self.last_health_check = time.time()
         self.health_check_interval = 60  # Vérifier toutes les 60 secondes
         self.error_count = 0
+
+    def load_last_update_id(self):
+        """Charge le dernier update_id depuis fichier pour éviter de retraiter les vieux messages"""
+        try:
+            update_id_file = Path(__file__).parent.parent / '.last_telegram_update'
+            if update_id_file.exists():
+                saved_id = int(update_id_file.read_text().strip())
+                logger.info(f"Dernier update_id chargé: {saved_id}")
+                return saved_id
+        except Exception as e:
+            logger.warning(f"Impossible de charger last_update_id: {e}")
+        return 0
+
+    def save_last_update_id(self):
+        """Sauvegarde le dernier update_id dans un fichier"""
+        try:
+            update_id_file = Path(__file__).parent.parent / '.last_telegram_update'
+            update_id_file.write_text(str(self.last_telegram_update_id))
+        except Exception as e:
+            logger.warning(f"Impossible de sauvegarder last_update_id: {e}")
 
     def send_telegram(self, message):
         """Envoie message Telegram"""
@@ -646,17 +667,30 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
         for update in updates:
             # Mettre à jour l'ID
-            self.last_telegram_update_id = max(self.last_telegram_update_id, update.get('update_id', 0))
+            update_id = update.get('update_id', 0)
+            self.last_telegram_update_id = max(self.last_telegram_update_id, update_id)
 
             # Vérifier si c'est un message texte
             message = update.get('message', {})
             text = message.get('text', '')
             chat_id = message.get('chat', {}).get('id')
+            message_date = message.get('date', 0)  # Timestamp Unix
+
+            # IGNORER LES VIEUX MESSAGES AU DÉMARRAGE (plus de 5 minutes)
+            message_age = time.time() - message_date
+            if message_age > 300:  # 5 minutes
+                logger.info(f"Message ignoré (trop vieux): {text} (âge: {message_age:.0f}s)")
+                continue
 
             # Vérifier que c'est bien notre chat
             if str(chat_id) == str(self.telegram_chat_id) and text.startswith('/'):
+                logger.info(f"📲 Commande reçue: {text} (update_id: {update_id})")
                 print(f"📲 Commande reçue: {text}")
                 self.handle_telegram_command(text.strip())
+
+        # Sauvegarder l'ID après traitement
+        if updates:
+            self.save_last_update_id()
 
     def get_price(self, symbol):
         """Récupère prix actuel"""

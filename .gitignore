@@ -30,3 +30,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Telegram state
+.last_telegram_update
