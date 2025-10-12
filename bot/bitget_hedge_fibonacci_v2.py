@@ -317,6 +317,7 @@ Balance disponible: ${balance:.0f}€
 
 🔄 /update - Mettre à jour depuis GitHub et redémarrer
 ♻️ /restart - Redémarrer le bot
+🧹 /cleanup - Fermer TOUTES les positions et ordres
 ⏹️ /stop - Arrêter le bot (nécessite confirmation)
 📊 /status - État système détaillé
 📜 /logs - Voir les derniers logs
@@ -324,6 +325,18 @@ Balance disponible: ${balance:.0f}€
 ⚠️ <b>Attention:</b> Ces commandes affectent le bot!
 """
             self.send_telegram(message)
+
+        elif command == '/cleanup':
+            self.send_telegram("🧹 <b>NETTOYAGE FORCÉ...</b>\n\nFermeture de toutes les positions et ordres...")
+            logger.info("Commande /cleanup reçue - nettoyage forcé")
+
+            try:
+                self.cleanup_all_positions_and_orders()
+                self.send_telegram("✅ Nettoyage terminé!\n\nLe bot continue de tourner avec des bases propres.")
+            except Exception as e:
+                error_msg = f"❌ Erreur cleanup: {e}"
+                logger.error(error_msg)
+                self.send_telegram(error_msg)
 
         elif command == '/logs':
             try:
