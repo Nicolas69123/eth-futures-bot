@@ -66,8 +66,8 @@ class HedgePosition:
         self.long_open = True
         self.short_open = True
 
-        # Grille Fibonacci
-        self.fib_levels = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+        # Grille Fibonacci (en % - divisé par 10 pour test rapide)
+        self.fib_levels = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 1.3, 2.1, 3.4, 5.5]
         self.current_level = 0
 
         # IDs des ordres actifs
@@ -271,23 +271,25 @@ class BitgetHedgeBotV2:
                 message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
                 message_parts.append(f"💰 Prix: ${current_price:.5f}\n")
 
-                # LONG
+                # LONG - EN VERT
                 if long_data:
-                    message_parts.append(f"📈 <b>LONG</b>")
-                    message_parts.append(f"   {long_data['size']:.0f} contrats @ ${long_data['entry_price']:.5f}")
-                    message_parts.append(f"   Marge: {long_data['margin']:.4f} USDT")
-                    message_parts.append(f"   P&L: {long_data['unrealized_pnl']:+.4f} USDT")
-                    message_parts.append(f"   ROE: {long_data['pnl_percentage']:+.2f}%\n")
+                    message_parts.append(f"🟢 <b>LONG</b>")
+                    message_parts.append(f"🟢 Contrats: {long_data['size']:.0f}")
+                    message_parts.append(f"🟢 Entrée: ${long_data['entry_price']:.5f}")
+                    message_parts.append(f"🟢 Marge: {long_data['margin']:.4f} USDT")
+                    message_parts.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"🟢 ROE: {long_data['pnl_percentage']:+.2f}%\n")
 
-                # SHORT
+                # SHORT - EN ROUGE
                 if short_data:
-                    message_parts.append(f"📉 <b>SHORT</b>")
-                    message_parts.append(f"   {short_data['size']:.0f} contrats @ ${short_data['entry_price']:.5f}")
-                    message_parts.append(f"   Marge: {short_data['margin']:.4f} USDT")
-                    message_parts.append(f"   P&L: {short_data['unrealized_pnl']:+.4f} USDT")
-                    message_parts.append(f"   ROE: {short_data['pnl_percentage']:+.2f}%")
+                    message_parts.append(f"🔴 <b>SHORT</b>")
+                    message_parts.append(f"🔴 Contrats: {short_data['size']:.0f}")
+                    message_parts.append(f"🔴 Entrée: ${short_data['entry_price']:.5f}")
+                    message_parts.append(f"🔴 Marge: {short_data['margin']:.4f} USDT")
+                    message_parts.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"🔴 ROE: {short_data['pnl_percentage']:+.2f}%")
                     if short_data.get('liquidation_price', 0) > 0:
-                        message_parts.append(f"   💀 Liq: ${short_data['liquidation_price']:.5f}")
+                        message_parts.append(f"🔴 💀 Liq: ${short_data['liquidation_price']:.5f}")
 
             if not has_positions:
                 self.send_telegram("⚠️ Aucune position active")
@@ -443,28 +445,26 @@ Balance disponible: ${balance:.0f}€
                     report.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
                     report.append(f"💰 Mark Price: ${current_price:.5f}\n")
 
-                    # LONG - Détails complets
+                    # LONG - EN VERT
                     if long_data:
-                        report.append(f"📈 <b>LONG</b>")
-                        report.append(f"   Contrats: {long_data['size']:.0f}")
-                        report.append(f"   Entrée: ${long_data['entry_price']:.5f}")
-                        report.append(f"   Break-even: ${long_data.get('mark_price', current_price):.5f}")
-                        report.append(f"   Marge: {long_data['margin']:.4f} USDT")
-                        report.append(f"   P&L: {long_data['unrealized_pnl']:+.4f} USDT")
-                        report.append(f"   ROE: {long_data['pnl_percentage']:+.2f}%\n")
+                        report.append(f"🟢 <b>LONG</b>")
+                        report.append(f"🟢 Contrats: {long_data['size']:.0f}")
+                        report.append(f"🟢 Entrée: ${long_data['entry_price']:.5f}")
+                        report.append(f"🟢 Marge: {long_data['margin']:.4f} USDT")
+                        report.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"🟢 ROE: {long_data['pnl_percentage']:+.2f}%\n")
 
-                    # SHORT - Détails complets
+                    # SHORT - EN ROUGE
                     if short_data:
-                        report.append(f"📉 <b>SHORT</b>")
-                        report.append(f"   Contrats: {short_data['size']:.0f}")
-                        report.append(f"   Entrée: ${short_data['entry_price']:.5f}")
-                        report.append(f"   Break-even: ${short_data.get('mark_price', current_price):.5f}")
-                        report.append(f"   Marge: {short_data['margin']:.4f} USDT")
-                        report.append(f"   P&L: {short_data['unrealized_pnl']:+.4f} USDT")
-                        report.append(f"   ROE: {short_data['pnl_percentage']:+.2f}%")
+                        report.append(f"🔴 <b>SHORT</b>")
+                        report.append(f"🔴 Contrats: {short_data['size']:.0f}")
+                        report.append(f"🔴 Entrée: ${short_data['entry_price']:.5f}")
+                        report.append(f"🔴 Marge: {short_data['margin']:.4f} USDT")
+                        report.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"🔴 ROE: {short_data['pnl_percentage']:+.2f}%")
                         liq = short_data.get('liquidation_price', 0)
                         if liq > 0:
-                            report.append(f"   💀 Liquidation: ${liq:.5f}")
+                            report.append(f"🔴 💀 Liq: ${liq:.5f}")
 
                 if not has_positions:
                     report.append("\n✅ Aucune position ouverte")
@@ -1189,23 +1189,25 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 long_final = final_real_pos.get('long')
                 short_final = final_real_pos.get('short')
 
-                # Message Telegram avec VRAIES données
+                # Message Telegram avec VRAIES données + COULEURS
                 message_parts = [f"🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>\n"]
 
                 if long_final:
-                    message_parts.append(f"📈 <b>LONG</b>")
-                    message_parts.append(f"   {long_final['size']:.0f} contrats @ ${long_final['entry_price']:.5f}")
-                    message_parts.append(f"   Marge: {long_final['margin']:.4f} USDT\n")
+                    message_parts.append(f"🟢 <b>LONG</b>")
+                    message_parts.append(f"🟢 Contrats: {long_final['size']:.0f}")
+                    message_parts.append(f"🟢 Entrée: ${long_final['entry_price']:.5f}")
+                    message_parts.append(f"🟢 Marge: {long_final['margin']:.4f} USDT\n")
 
                 if short_final:
-                    message_parts.append(f"📉 <b>SHORT</b>")
-                    message_parts.append(f"   {short_final['size']:.0f} contrats @ ${short_final['entry_price']:.5f}")
-                    message_parts.append(f"   Marge: {short_final['margin']:.4f} USDT\n")
+                    message_parts.append(f"🔴 <b>SHORT</b>")
+                    message_parts.append(f"🔴 Contrats: {short_final['size']:.0f}")
+                    message_parts.append(f"🔴 Entrée: ${short_final['entry_price']:.5f}")
+                    message_parts.append(f"🔴 Marge: {short_final['margin']:.4f} USDT\n")
 
                 message_parts.append(f"⚡ Levier: x{self.LEVERAGE}")
-                message_parts.append(f"\n📝 <b>Ordres actifs:</b>")
-                message_parts.append(f"⬆️ Si +{next_trigger_pct}%: TP Long + Doubler Short")
-                message_parts.append(f"⬇️ Si -{next_trigger_pct}%: TP Short + Doubler Long")
+                message_parts.append(f"\n📝 <b>Ordres:</b>")
+                message_parts.append(f"⬆️ Si +{next_trigger_pct}%: TP Long + Double Short")
+                message_parts.append(f"⬇️ Si -{next_trigger_pct}%: TP Short + Double Long")
                 message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
 
                 self.send_telegram("\n".join(message_parts))
@@ -1342,20 +1344,23 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         message_parts.append(f"💰 Prix TP: ${current_price:.5f}")
                         message_parts.append(f"💵 Profit réalisé: ~{long_profit:+.4f} USDT\n")
 
-                        # Short (doublé)
+                        # Short (doublé) - EN ROUGE
                         if final_pos.get('short'):
                             sd = final_pos['short']
-                            message_parts.append(f"📉 <b>SHORT</b> (doublé - Fib {position.current_level})")
-                            message_parts.append(f"   {sd['size']:.0f} contrats @ ${sd['entry_price']:.5f}")
-                            message_parts.append(f"   Marge: {sd['margin']:.4f} USDT")
-                            message_parts.append(f"   P&L: {sd['unrealized_pnl']:+.4f} USDT ({sd['pnl_percentage']:+.2f}%)\n")
+                            message_parts.append(f"🔴 <b>SHORT</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"🔴 Contrats: {sd['size']:.0f}")
+                            message_parts.append(f"🔴 Entrée: ${sd['entry_price']:.5f}")
+                            message_parts.append(f"🔴 Marge: {sd['margin']:.4f} USDT")
+                            message_parts.append(f"🔴 P&L: {sd['unrealized_pnl']:+.4f} USDT")
+                            message_parts.append(f"🔴 ROE: {sd['pnl_percentage']:+.2f}%\n")
 
-                        # Long (réouvert)
+                        # Long (réouvert) - EN VERT
                         if final_pos.get('long'):
                             ld = final_pos['long']
-                            message_parts.append(f"📈 <b>LONG</b> (réouvert - Fib 0)")
-                            message_parts.append(f"   {ld['size']:.0f} contrats @ ${ld['entry_price']:.5f}")
-                            message_parts.append(f"   Marge: {ld['margin']:.4f} USDT")
+                            message_parts.append(f"🟢 <b>LONG</b> (réouvert - Fib 0)")
+                            message_parts.append(f"🟢 Contrats: {ld['size']:.0f}")
+                            message_parts.append(f"🟢 Entrée: ${ld['entry_price']:.5f}")
+                            message_parts.append(f"🟢 Marge: {ld['margin']:.4f} USDT")
 
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
@@ -1446,20 +1451,23 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         message_parts.append(f"💰 Prix TP: ${current_price:.5f}")
                         message_parts.append(f"💵 Profit réalisé: ~{short_profit:+.4f} USDT\n")
 
-                        # Long (doublé)
+                        # Long (doublé) - EN VERT
                         if final_pos.get('long'):
                             ld = final_pos['long']
-                            message_parts.append(f"📈 <b>LONG</b> (doublé - Fib {position.current_level})")
-                            message_parts.append(f"   {ld['size']:.0f} contrats @ ${ld['entry_price']:.5f}")
-                            message_parts.append(f"   Marge: {ld['margin']:.4f} USDT")
-                            message_parts.append(f"   P&L: {ld['unrealized_pnl']:+.4f} USDT ({ld['pnl_percentage']:+.2f}%)\n")
+                            message_parts.append(f"🟢 <b>LONG</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"🟢 Contrats: {ld['size']:.0f}")
+                            message_parts.append(f"🟢 Entrée: ${ld['entry_price']:.5f}")
+                            message_parts.append(f"🟢 Marge: {ld['margin']:.4f} USDT")
+                            message_parts.append(f"🟢 P&L: {ld['unrealized_pnl']:+.4f} USDT")
+                            message_parts.append(f"🟢 ROE: {ld['pnl_percentage']:+.2f}%\n")
 
-                        # Short (réouvert)
+                        # Short (réouvert) - EN ROUGE
                         if final_pos.get('short'):
                             sd = final_pos['short']
-                            message_parts.append(f"📉 <b>SHORT</b> (réouvert - Fib 0)")
-                            message_parts.append(f"   {sd['size']:.0f} contrats @ ${sd['entry_price']:.5f}")
-                            message_parts.append(f"   Marge: {sd['margin']:.4f} USDT")
+                            message_parts.append(f"🔴 <b>SHORT</b> (réouvert - Fib 0)")
+                            message_parts.append(f"🔴 Contrats: {sd['size']:.0f}")
+                            message_parts.append(f"🔴 Entrée: ${sd['entry_price']:.5f}")
+                            message_parts.append(f"🔴 Marge: {sd['margin']:.4f} USDT")
 
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
@@ -1543,8 +1551,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 new_long_size = long_data['size']
                 new_long_entry = long_data['entry_price']
 
-                # TP Long au premier niveau Fibonacci (+1% du nouveau prix d'entrée)
-                first_fib_level = 1  # Premier niveau = 1%
+                # TP Long au premier niveau Fibonacci (utilise fib_levels[0])
+                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.1
                 tp_long_price = new_long_entry * (1 + first_fib_level / 100)
 
                 # Placer TP Long
@@ -1634,8 +1642,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 new_short_size = short_data['size']
                 new_short_entry = short_data['entry_price']
 
-                # TP Short au premier niveau Fibonacci (-1% du nouveau prix d'entrée)
-                first_fib_level = 1  # Premier niveau = 1%
+                # TP Short au premier niveau Fibonacci (utilise fib_levels[0])
+                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.1
                 tp_short_price = new_short_entry * (1 - first_fib_level / 100)
 
                 # Placer TP Short
@@ -1951,7 +1959,7 @@ Erreurs totales: {self.error_count}
                             message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
                             message_parts.append(f"💰 Prix: ${current_price:.5f}\n")
 
-                            # LONG (si ouvert)
+                            # LONG (si ouvert) - EN VERT
                             if long_data:
                                 contracts = long_data['size']
                                 entry = long_data['entry_price']
@@ -1959,14 +1967,14 @@ Erreurs totales: {self.error_count}
                                 pnl = long_data['unrealized_pnl']
                                 roe = long_data['pnl_percentage']
 
-                                message_parts.append(f"📈 <b>LONG</b>")
-                                message_parts.append(f"   Contrats: {contracts:.0f}")
-                                message_parts.append(f"   Entrée: ${entry:.5f}")
-                                message_parts.append(f"   Marge: {margin:.4f} USDT")
-                                message_parts.append(f"   P&L: {pnl:+.4f} USDT")
-                                message_parts.append(f"   ROE: {roe:+.2f}%\n")
+                                message_parts.append(f"🟢 <b>LONG</b>")
+                                message_parts.append(f"🟢 Contrats: {contracts:.0f}")
+                                message_parts.append(f"🟢 Entrée: ${entry:.5f}")
+                                message_parts.append(f"🟢 Marge: {margin:.4f} USDT")
+                                message_parts.append(f"🟢 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🟢 ROE: {roe:+.2f}%\n")
 
-                            # SHORT (si ouvert)
+                            # SHORT (si ouvert) - EN ROUGE
                             if short_data:
                                 contracts = short_data['size']
                                 entry = short_data['entry_price']
@@ -1975,14 +1983,14 @@ Erreurs totales: {self.error_count}
                                 roe = short_data['pnl_percentage']
                                 liq_price = short_data.get('liquidation_price', 0)
 
-                                message_parts.append(f"📉 <b>SHORT</b>")
-                                message_parts.append(f"   Contrats: {contracts:.0f}")
-                                message_parts.append(f"   Entrée: ${entry:.5f}")
-                                message_parts.append(f"   Marge: {margin:.4f} USDT")
-                                message_parts.append(f"   P&L: {pnl:+.4f} USDT")
-                                message_parts.append(f"   ROE: {roe:+.2f}%")
+                                message_parts.append(f"🔴 <b>SHORT</b>")
+                                message_parts.append(f"🔴 Contrats: {contracts:.0f}")
+                                message_parts.append(f"🔴 Entrée: ${entry:.5f}")
+                                message_parts.append(f"🔴 Marge: {margin:.4f} USDT")
+                                message_parts.append(f"🔴 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🔴 ROE: {roe:+.2f}%")
                                 if liq_price > 0:
-                                    message_parts.append(f"   💀 Liq: ${liq_price:.5f}")
+                                    message_parts.append(f"🔴 💀 Liq: ${liq_price:.5f}")
 
                     except Exception as e:
                         logger.error(f"Erreur affichage {pair}: {e}")
