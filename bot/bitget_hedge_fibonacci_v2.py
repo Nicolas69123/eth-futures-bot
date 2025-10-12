@@ -1317,12 +1317,43 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         self.cancel_order(position.orders['double_long'], pair)
                         position.orders['double_long'] = None
 
+                    # RÉ-OUVRIR UN NOUVEAU LONG (niveau Fib 0 - marge initiale)
+                    logger.info(f"Réouverture nouveau Long {pair} au niveau Fib 0")
+                    print(f"\n🔄 RÉ-OUVERTURE NOUVEAU LONG {pair}")
+
+                    try:
+                        current_price = self.get_price(pair)
+                        notional = self.INITIAL_MARGIN * self.LEVERAGE
+                        new_long_size = notional / current_price
+
+                        # Ouvrir nouveau Long au prix actuel
+                        new_long = self.exchange.create_order(
+                            symbol=pair, type='market', side='buy', amount=new_long_size,
+                            params={'tradeSide': 'open', 'holdSide': 'long'}
+                        )
+                        logger.info(f"✅ Nouveau Long ouvert: {new_long_size:.4f} @ {self.format_price(current_price, pair)}")
+                        print(f"✅ Nouveau Long ouvert: {new_long_size:.4f} @ {self.format_price(current_price, pair)}")
+
+                        time.sleep(2)
+
+                        # Récupérer prix entrée réel
+                        real_pos_new = self.get_real_positions(pair)
+                        if real_pos_new and real_pos_new.get('long'):
+                            new_entry_long = real_pos_new['long']['entry_price']
+                            position.entry_price_long = new_entry_long
+                            position.long_open = True
+                            logger.info(f"Position Long mise à jour: entrée = {self.format_price(new_entry_long, pair)}")
+
+                    except Exception as e:
+                        logger.error(f"❌ Erreur réouverture Long: {e}")
+                        print(f"❌ Erreur réouverture Long: {e}")
+
                     # Replacer ordres au niveau Fibonacci suivant
                     position.current_level += 1
                     self.place_next_level_orders(pair, position, direction='up')
 
-                    # Ouvrir nouveau hedge
-                    self.open_next_hedge()
+                    # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
+                    # self.open_next_hedge()  # DÉSACTIVÉ
 
                 # TP SHORT EXÉCUTÉ (prix a descendu)
                 elif tp_short_executed:
@@ -1364,12 +1395,43 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         self.cancel_order(position.orders['double_short'], pair)
                         position.orders['double_short'] = None
 
+                    # RÉ-OUVRIR UN NOUVEAU SHORT (niveau Fib 0 - marge initiale)
+                    logger.info(f"Réouverture nouveau Short {pair} au niveau Fib 0")
+                    print(f"\n🔄 RÉ-OUVERTURE NOUVEAU SHORT {pair}")
+
+                    try:
+                        current_price = self.get_price(pair)
+                        notional = self.INITIAL_MARGIN * self.LEVERAGE
+                        new_short_size = notional / current_price
+
+                        # Ouvrir nouveau Short au prix actuel
+                        new_short = self.exchange.create_order(
+                            symbol=pair, type='market', side='sell', amount=new_short_size,
+                            params={'tradeSide': 'open', 'holdSide': 'short'}
+                        )
+                        logger.info(f"✅ Nouveau Short ouvert: {new_short_size:.4f} @ {self.format_price(current_price, pair)}")
+                        print(f"✅ Nouveau Short ouvert: {new_short_size:.4f} @ {self.format_price(current_price, pair)}")
+
+                        time.sleep(2)
+
+                        # Récupérer prix entrée réel
+                        real_pos_new = self.get_real_positions(pair)
+                        if real_pos_new and real_pos_new.get('short'):
+                            new_entry_short = real_pos_new['short']['entry_price']
+                            position.entry_price_short = new_entry_short
+                            position.short_open = True
+                            logger.info(f"Position Short mise à jour: entrée = {self.format_price(new_entry_short, pair)}")
+
+                    except Exception as e:
+                        logger.error(f"❌ Erreur réouverture Short: {e}")
+                        print(f"❌ Erreur réouverture Short: {e}")
+
                     # Replacer ordres au niveau Fibonacci suivant
                     position.current_level += 1
                     self.place_next_level_orders(pair, position, direction='down')
 
-                    # Ouvrir nouveau hedge
-                    self.open_next_hedge()
+                    # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
+                    # self.open_next_hedge()  # DÉSACTIVÉ
 
             except Exception as e:
                 print(f"⚠️  Erreur vérification ordres {pair}: {e}")
@@ -1377,117 +1439,204 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def place_next_level_orders(self, pair, position, direction):
         """
         Place les ordres pour le prochain niveau Fibonacci
-        Place à la fois le doublement ET le nouveau TP pour garantir profit
+        NOUVELLE LOGIQUE: Place ordres pour BOTH côtés (hedge permanent)
         """
 
         next_trigger = position.get_next_trigger_pct()
         if not next_trigger:
+            logger.info("✅ Fibonacci terminé pour cette paire")
             print("✅ Fibonacci terminé pour cette paire")
             return
 
         real_pos = self.get_real_positions(pair)
         if not real_pos:
+            logger.warning(f"Impossible de récupérer positions pour {pair}")
             return
 
+        logger.info(f"Placement ordres niveau Fibonacci {position.current_level} (+{next_trigger}%)")
         print(f"\n📝 Placement ordres niveau Fibonacci {position.current_level} (+{next_trigger}%)")
 
-        if direction == 'up':  # Prix a monté → Il reste seulement le SHORT
+        if direction == 'up':  # Prix a monté → SHORT doublé + NOUVEAU LONG réouvert
+
+            # ORDRES POUR LE SHORT (doublé)
             short_data = real_pos.get('short')
-            if not short_data:
-                print("❌ Aucune position Short trouvée")
-                return
+            if short_data:
+                current_size_short = short_data['size']
+                current_entry_short = short_data['entry_price']
 
-            current_size = short_data['size']
-            current_entry = short_data['entry_price']
+                # 1. Calculer prix du prochain doublement Short
+                new_double_short_price = position.entry_price_short * (1 + next_trigger / 100)
 
-            # 1. Calculer prix du prochain doublement (niveau Fibonacci suivant)
-            new_double_price = position.entry_price_short * (1 + next_trigger / 100)
+                # 2. Calculer prix du TP Short
+                tp_short_price = self.calculate_breakeven_tp_price(position, real_pos, 'up')
+                if not tp_short_price:
+                    tp_short_price = current_entry_short * 0.995  # Fallback
 
-            # 2. Calculer prix du nouveau TP qui garantit profit
-            tp_price = self.calculate_breakeven_tp_price(position, real_pos, 'up')
-            if not tp_price:
-                # Fallback: -0.5% du prix moyen actuel
-                tp_price = current_entry * 0.995
+                # 3. Placer ordre DOUBLER SHORT
+                try:
+                    double_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='sell', amount=current_size_short * 2,
+                        price=new_double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+                    )
+                    verified = self.verify_order_placed(double_order['id'], pair)
+                    if verified:
+                        position.orders['double_short'] = double_order['id']
+                        logger.info(f"✅ Doubler Short @ {self.format_price(new_double_short_price, pair)}")
+                        print(f"✅ Doubler Short @ {self.format_price(new_double_short_price, pair)} (+{next_trigger}%)")
+                except Exception as e:
+                    logger.error(f"Erreur Doubler Short: {e}")
+                    print(f"❌ Erreur Doubler Short: {e}")
 
-            # 3. Placer ordre DOUBLER SHORT au niveau Fibonacci
-            try:
-                double_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='sell', amount=current_size * 2,
-                    price=new_double_price, params={'tradeSide': 'open'}
-                )
-                verified = self.verify_order_placed(double_order['id'], pair)
-                if verified:
-                    position.orders['double_short'] = double_order['id']
-                    print(f"✅ Doubler Short @ {self.format_price(new_double_price, pair)} (+{next_trigger}%)")
-                else:
-                    print(f"❌ Échec placement Doubler Short")
-            except Exception as e:
-                print(f"❌ Erreur Doubler Short: {e}")
+                # 4. Placer TP SHORT
+                try:
+                    tp_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='buy', amount=current_size_short,
+                        price=tp_short_price, params={'tradeSide': 'close', 'holdSide': 'short'}
+                    )
+                    verified = self.verify_order_placed(tp_order['id'], pair)
+                    if verified:
+                        position.orders['tp_short'] = tp_order['id']
+                        profit_pct = ((current_entry_short - tp_short_price) / current_entry_short) * 100
+                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)}")
+                        print(f"✅ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} ({profit_pct:+.2f}%)")
+                except Exception as e:
+                    logger.error(f"Erreur TP Short: {e}")
+                    print(f"❌ Erreur TP Short: {e}")
 
-            # 4. Placer nouveau TP SHORT (fermeture avec profit)
-            try:
-                tp_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='buy', amount=current_size,
-                    price=tp_price, params={'tradeSide': 'close'}
-                )
-                verified = self.verify_order_placed(tp_order['id'], pair)
-                if verified:
-                    position.orders['tp_short'] = tp_order['id']
-                    profit_pct = ((current_entry - tp_price) / current_entry) * 100
-                    print(f"✅ Nouveau TP Short @ {self.format_price(tp_price, pair)} ({profit_pct:+.2f}%)")
-                else:
-                    print(f"❌ Échec placement TP Short")
-            except Exception as e:
-                print(f"❌ Erreur TP Short: {e}")
-
-        elif direction == 'down':  # Prix a descendu → Il reste seulement le LONG
+            # ORDRES POUR LE NOUVEAU LONG (réouvert au niveau Fib 0)
             long_data = real_pos.get('long')
-            if not long_data:
-                print("❌ Aucune position Long trouvée")
-                return
+            if long_data:
+                new_long_size = long_data['size']
+                new_long_entry = long_data['entry_price']
 
-            current_size = long_data['size']
-            current_entry = long_data['entry_price']
+                # TP Long au premier niveau Fibonacci (+1% du nouveau prix d'entrée)
+                first_fib_level = 1  # Premier niveau = 1%
+                tp_long_price = new_long_entry * (1 + first_fib_level / 100)
 
-            # 1. Calculer prix du prochain doublement
-            new_double_price = position.entry_price_long * (1 - next_trigger / 100)
+                # Placer TP Long
+                try:
+                    tp_long_order = self.place_tpsl_order(
+                        symbol=pair,
+                        plan_type='profit_plan',
+                        trigger_price=tp_long_price,
+                        hold_side='long',
+                        size=new_long_size
+                    )
+                    if tp_long_order and tp_long_order.get('id'):
+                        position.orders['tp_long'] = tp_long_order['id']
+                        logger.info(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)}")
+                        print(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)} (+{first_fib_level}%)")
+                except Exception as e:
+                    logger.error(f"Erreur TP Long: {e}")
+                    print(f"❌ Erreur TP Long: {e}")
 
-            # 2. Calculer prix du nouveau TP qui garantit profit
-            tp_price = self.calculate_breakeven_tp_price(position, real_pos, 'down')
-            if not tp_price:
-                # Fallback: +0.5% du prix moyen actuel
-                tp_price = current_entry * 1.005
+                # Doubler Long (si prix descend depuis le nouveau point d'entrée)
+                double_long_price = new_long_entry * (1 - first_fib_level / 100)
 
-            # 3. Placer ordre DOUBLER LONG au niveau Fibonacci
-            try:
-                double_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='buy', amount=current_size * 2,
-                    price=new_double_price, params={'tradeSide': 'open'}
-                )
-                verified = self.verify_order_placed(double_order['id'], pair)
-                if verified:
-                    position.orders['double_long'] = double_order['id']
-                    print(f"✅ Doubler Long @ {self.format_price(new_double_price, pair)} (-{next_trigger}%)")
-                else:
-                    print(f"❌ Échec placement Doubler Long")
-            except Exception as e:
-                print(f"❌ Erreur Doubler Long: {e}")
+                try:
+                    double_long_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='buy', amount=new_long_size * 2,
+                        price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                    )
+                    verified = self.verify_order_placed(double_long_order['id'], pair)
+                    if verified:
+                        position.orders['double_long'] = double_long_order['id']
+                        logger.info(f"✅ Doubler Long @ {self.format_price(double_long_price, pair)}")
+                        print(f"✅ Doubler Long @ {self.format_price(double_long_price, pair)} (-{first_fib_level}%)")
+                except Exception as e:
+                    logger.error(f"Erreur Doubler Long: {e}")
+                    print(f"❌ Erreur Doubler Long: {e}")
 
-            # 4. Placer nouveau TP LONG (fermeture avec profit)
-            try:
-                tp_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='sell', amount=current_size,
-                    price=tp_price, params={'tradeSide': 'close'}
-                )
-                verified = self.verify_order_placed(tp_order['id'], pair)
-                if verified:
-                    position.orders['tp_long'] = tp_order['id']
-                    profit_pct = ((tp_price - current_entry) / current_entry) * 100
-                    print(f"✅ Nouveau TP Long @ {self.format_price(tp_price, pair)} ({profit_pct:+.2f}%)")
-                else:
-                    print(f"❌ Échec placement TP Long")
-            except Exception as e:
-                print(f"❌ Erreur TP Long: {e}")
+        elif direction == 'down':  # Prix a descendu → LONG doublé + NOUVEAU SHORT réouvert
+
+            # ORDRES POUR LE LONG (doublé)
+            long_data = real_pos.get('long')
+            if long_data:
+                current_size_long = long_data['size']
+                current_entry_long = long_data['entry_price']
+
+                # 1. Calculer prix du prochain doublement Long
+                new_double_long_price = position.entry_price_long * (1 - next_trigger / 100)
+
+                # 2. Calculer prix du TP Long
+                tp_long_price = self.calculate_breakeven_tp_price(position, real_pos, 'down')
+                if not tp_long_price:
+                    tp_long_price = current_entry_long * 1.005  # Fallback
+
+                # 3. Placer ordre DOUBLER LONG
+                try:
+                    double_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='buy', amount=current_size_long * 2,
+                        price=new_double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                    )
+                    verified = self.verify_order_placed(double_order['id'], pair)
+                    if verified:
+                        position.orders['double_long'] = double_order['id']
+                        logger.info(f"✅ Doubler Long @ {self.format_price(new_double_long_price, pair)}")
+                        print(f"✅ Doubler Long @ {self.format_price(new_double_long_price, pair)} (-{next_trigger}%)")
+                except Exception as e:
+                    logger.error(f"Erreur Doubler Long: {e}")
+                    print(f"❌ Erreur Doubler Long: {e}")
+
+                # 4. Placer TP LONG
+                try:
+                    tp_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='sell', amount=current_size_long,
+                        price=tp_long_price, params={'tradeSide': 'close', 'holdSide': 'long'}
+                    )
+                    verified = self.verify_order_placed(tp_order['id'], pair)
+                    if verified:
+                        position.orders['tp_long'] = tp_order['id']
+                        profit_pct = ((tp_long_price - current_entry_long) / current_entry_long) * 100
+                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)}")
+                        print(f"✅ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} ({profit_pct:+.2f}%)")
+                except Exception as e:
+                    logger.error(f"Erreur TP Long: {e}")
+                    print(f"❌ Erreur TP Long: {e}")
+
+            # ORDRES POUR LE NOUVEAU SHORT (réouvert au niveau Fib 0)
+            short_data = real_pos.get('short')
+            if short_data:
+                new_short_size = short_data['size']
+                new_short_entry = short_data['entry_price']
+
+                # TP Short au premier niveau Fibonacci (-1% du nouveau prix d'entrée)
+                first_fib_level = 1  # Premier niveau = 1%
+                tp_short_price = new_short_entry * (1 - first_fib_level / 100)
+
+                # Placer TP Short
+                try:
+                    tp_short_order = self.place_tpsl_order(
+                        symbol=pair,
+                        plan_type='profit_plan',
+                        trigger_price=tp_short_price,
+                        hold_side='short',
+                        size=new_short_size
+                    )
+                    if tp_short_order and tp_short_order.get('id'):
+                        position.orders['tp_short'] = tp_short_order['id']
+                        logger.info(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)}")
+                        print(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)} (-{first_fib_level}%)")
+                except Exception as e:
+                    logger.error(f"Erreur TP Short: {e}")
+                    print(f"❌ Erreur TP Short: {e}")
+
+                # Doubler Short (si prix monte depuis le nouveau point d'entrée)
+                double_short_price = new_short_entry * (1 + first_fib_level / 100)
+
+                try:
+                    double_short_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='sell', amount=new_short_size * 2,
+                        price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+                    )
+                    verified = self.verify_order_placed(double_short_order['id'], pair)
+                    if verified:
+                        position.orders['double_short'] = double_short_order['id']
+                        logger.info(f"✅ Doubler Short @ {self.format_price(double_short_price, pair)}")
+                        print(f"✅ Doubler Short @ {self.format_price(double_short_price, pair)} (+{first_fib_level}%)")
+                except Exception as e:
+                    logger.error(f"Erreur Doubler Short: {e}")
+                    print(f"❌ Erreur Doubler Short: {e}")
 
     def open_next_hedge(self):
         """Ouvre un nouveau hedge sur la prochaine paire disponible"""
@@ -1929,9 +2078,23 @@ Bitget API: {'✅' if self.api_key else '❌'}
 """
             self.send_telegram(startup)
 
-            # Ouvrir première position
-            if self.available_pairs:
-                self.open_hedge_with_limit_orders(self.available_pairs[0])
+            # Ouvrir hedges sur TOUTES les paires disponibles
+            logger.info(f"Ouverture des hedges sur {len(self.available_pairs)} paires")
+            print(f"\n📊 Ouverture des hedges sur {len(self.available_pairs)} paires...")
+
+            pairs_to_open = self.available_pairs.copy()
+            for idx, pair in enumerate(pairs_to_open):
+                if self.capital_used >= self.MAX_CAPITAL:
+                    logger.warning(f"Capital max atteint, arrêt ouverture à {idx} paires")
+                    break
+
+                logger.info(f"Ouverture hedge {idx+1}/{len(pairs_to_open)}: {pair}")
+                success = self.open_hedge_with_limit_orders(pair)
+
+                if success and idx < len(pairs_to_open) - 1:
+                    # Attendre 3s entre chaque ouverture
+                    logger.info(f"Attente 3s avant prochaine paire...")
+                    time.sleep(3)
 
             # Boucle
             iteration = 0
