@@ -360,6 +360,7 @@ Balance disponible: ${balance:.0f}€
 ♻️ /restart - Redémarrer le bot
 🧹 /cleanup - Fermer TOUTES les positions et ordres
 🔍 /checkapi - Vérifier positions réelles sur Bitget API
+🔥 /forceclose - Force fermeture avec Flash Close API
 📜 /logs - Voir les derniers logs du bot
 🐛 /debugrestart - Voir le log du dernier redémarrage
 ⏹️ /stop - Arrêter le bot (nécessite confirmation)
@@ -368,6 +369,49 @@ Balance disponible: ${balance:.0f}€
 ⚠️ <b>Attention:</b> Ces commandes affectent le bot!
 """
             self.send_telegram(message)
+
+        elif command == '/forceclose':
+            self.send_telegram("🔥 <b>FORCE CLOSE - Flash Close API</b>\n\nFermeture de TOUTES les positions...")
+            logger.info("Commande /forceclose reçue")
+
+            try:
+                closed_positions = []
+
+                for pair in self.volatile_pairs:
+                    positions = self.exchange.fetch_positions(symbols=[pair])
+                    for pos in positions:
+                        size = float(pos.get('contracts', 0))
+                        if size > 0:
+                            side = pos.get('side', '').lower()
+
+                            logger.info(f"Force Close: {side.upper()} {pair} - {size} contrats")
+
+                            # Utiliser Flash Close API
+                            success = self.flash_close_position(pair, side)
+
+                            if success:
+                                closed_positions.append(f"✅ {side.upper()} {pair.split('/')[0]} ({size:.0f})")
+                            else:
+                                closed_positions.append(f"❌ Échec {side.upper()} {pair.split('/')[0]}")
+
+                            time.sleep(1)
+
+                if closed_positions:
+                    message = f"""
+🔥 <b>FORCE CLOSE TERMINÉ</b>
+
+{chr(10).join(closed_positions)}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                    self.send_telegram(message)
+                else:
+                    self.send_telegram("✅ Aucune position à fermer")
+
+            except Exception as e:
+                error_msg = f"❌ Erreur /forceclose: {e}"
+                logger.error(error_msg)
+                self.send_telegram(error_msg)
 
         elif command == '/debugrestart':
             # Lire le log du script de redémarrage
@@ -1688,18 +1732,76 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             time.sleep(2)
             self.open_hedge_with_limit_orders(next_pair)
 
+    def flash_close_position(self, pair, side):
+        """
+        Ferme TOUTE une position en utilisant l'endpoint Bitget Flash Close Position
+        API: /api/v2/mix/order/close-positions
+        Ferme automatiquement 100% de la position, pas besoin de spécifier la quantité
+        """
+        logger.info(f"Flash Close Position: {side.upper()} {pair}")
+
+        try:
+            # Convertir symbol au format Bitget
+            symbol_bitget = pair.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+
+            # Endpoint Flash Close Position
+            endpoint = '/api/v2/mix/order/close-positions'
+            body = {
+                'symbol': symbol_bitget,
+                'productType': 'USDT-FUTURES',
+                'holdSide': side  # 'long' ou 'short'
+            }
+            body_json = json.dumps(body)
+
+            # Timestamp et signature
+            timestamp = str(int(time.time() * 1000))
+            signature = self.bitget_sign_request(timestamp, 'POST', endpoint, body_json)
+
+            # Headers
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': self.api_password,
+                'Content-Type': 'application/json',
+                'locale': 'en-US',
+                'PAPTRADING': '1'
+            }
+
+            # Requête HTTP
+            url = f"https://api.bitget.com{endpoint}"
+            response = requests.post(url, headers=headers, data=body_json, timeout=10)
+            data = response.json()
+
+            if data.get('code') == '00000':
+                logger.info(f"✅ Flash Close réussi: {side} {pair}")
+                print(f"✅ Position {side} fermée à 100% (Flash Close)")
+                return True
+            else:
+                logger.error(f"Flash Close échoué: {data}")
+                print(f"⚠️ Flash Close réponse: {data}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Erreur Flash Close: {e}")
+            print(f"❌ Erreur Flash Close: {e}")
+            return False
+
     def cleanup_all_positions_and_orders(self):
         """
         Nettoie TOUTES les positions et ordres au démarrage
         Pour repartir sur des bases propres
+        Utilise force_close_position pour garantir fermeture complète
         """
+        logger.info("=== NETTOYAGE COMPLET DÉMARRÉ ===")
         print("\n🧹 NETTOYAGE DES POSITIONS ET ORDRES EXISTANTS...")
         self.send_telegram("🧹 <b>Nettoyage session précédente...</b>")
 
         cleanup_report = []
 
         try:
-            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC VÉRIFICATION)
+            # 1. FERMER TOUTES LES POSITIONS avec Flash Close API
+            logger.info("Étape 1: Fermeture des positions avec Flash Close API")
             for pair in self.volatile_pairs:
                 try:
                     positions = self.exchange.fetch_positions(symbols=[pair])
@@ -1707,71 +1809,32 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         size = float(pos.get('contracts', 0))
                         if size > 0:
                             side = pos.get('side', '').lower()
-                            symbol = pos['symbol']
 
-                            logger.info(f"Fermeture position {side} sur {symbol}: {size} contrats")
-                            print(f"   🔴 Fermeture position {side} sur {symbol}: {size} contrats")
+                            logger.info(f"Position trouvée: {side.upper()} {pair} - {size} contrats")
+                            print(f"   🔴 Fermeture {side.upper()} {pair}: {size} contrats")
 
-                            # Fermer la position avec un ordre market opposé - SYNTAXE CORRECTE BITGET
-                            if side == 'long':
-                                logger.info(f"Tentative fermeture LONG: {symbol}, side=sell, amount={size}, holdSide=long")
-                                close_order = self.exchange.create_order(
-                                    symbol=symbol,
-                                    type='market',
-                                    side='sell',
-                                    amount=size,
-                                    params={'tradeSide': 'close', 'holdSide': 'long'}
-                                )
-                                logger.info(f"Ordre fermeture LONG exécuté: {close_order.get('id', 'N/A')}")
-                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]} ({size:.2f})")
-                            elif side == 'short':
-                                logger.info(f"Tentative fermeture SHORT: {symbol}, side=buy, amount={size}, holdSide=short")
-                                close_order = self.exchange.create_order(
-                                    symbol=symbol,
-                                    type='market',
-                                    side='buy',
-                                    amount=size,
-                                    params={'tradeSide': 'close', 'holdSide': 'short'}
-                                )
-                                logger.info(f"Ordre fermeture SHORT exécuté: {close_order.get('id', 'N/A')}")
-                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]} ({size:.2f})")
+                            # UTILISER FLASH CLOSE API (ferme 100% automatiquement)
+                            success = self.flash_close_position(pair, side)
 
-                            time.sleep(2)  # Attendre exécution complète
+                            if success:
+                                cleanup_report.append(f"✅ Fermé {side.upper()} {pair.split('/')[0]} ({size:.0f} contrats)")
 
-                            # VÉRIFIER que la position est bien fermée à 100%
-                            max_retries = 3
-                            for retry in range(max_retries):
-                                time.sleep(1)
-                                verify_pos = self.exchange.fetch_positions(symbols=[pair])
-
-                                position_found = False
-                                for vpos in verify_pos:
+                                # Vérifier que c'est bien fermé
+                                time.sleep(2)
+                                verify = self.exchange.fetch_positions(symbols=[pair])
+                                for vpos in verify:
                                     if vpos.get('side', '').lower() == side:
                                         remaining = float(vpos.get('contracts', 0))
                                         if remaining > 0:
-                                            position_found = True
-                                            logger.warning(f"⚠️ Position {side} pas complètement fermée: {remaining} reste (tentative {retry+1}/{max_retries})")
-                                            print(f"   ⚠️ RESTE {remaining} contrats {side} - Nouvelle tentative...")
+                                            logger.warning(f"⚠️ Flash Close n'a pas tout fermé: {remaining} reste")
+                                            cleanup_report.append(f"⚠️ {side.upper()} {pair.split('/')[0]}: {remaining} restants")
+                                        else:
+                                            logger.info(f"✅ Vérification OK: {side} {pair} fermé à 100%")
+                            else:
+                                cleanup_report.append(f"❌ Échec fermeture {side.upper()} {pair.split('/')[0]}")
+                                logger.error(f"Échec Flash Close pour {side} {pair}")
 
-                                            # Tenter de fermer à nouveau avec holdSide
-                                            try:
-                                                self.exchange.create_order(
-                                                    symbol=symbol,
-                                                    type='market',
-                                                    side='sell' if side == 'long' else 'buy',
-                                                    amount=remaining,
-                                                    params={'tradeSide': 'close', 'holdSide': side}
-                                                )
-                                                logger.info(f"✅ Fermeture complète position {side} (tentative {retry+1})")
-                                                time.sleep(2)
-                                            except Exception as retry_error:
-                                                logger.error(f"Erreur lors de la fermeture retry: {retry_error}")
-                                                break
-
-                                if not position_found:
-                                    logger.info(f"✅ Position {side} complètement fermée")
-                                    print(f"   ✅ Position {side} 100% fermée")
-                                    break
+                            time.sleep(1)
 
                 except Exception as e:
                     error_msg = f"Erreur fermeture positions {pair}: {e}"
