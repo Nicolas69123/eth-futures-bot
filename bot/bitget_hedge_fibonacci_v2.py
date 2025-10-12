@@ -16,10 +16,41 @@ import hashlib
 import json
 import subprocess
 import sys
+import logging
+from collections import deque
 
 # Charger .env
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
+
+# Configuration du logging
+log_dir = Path(__file__).parent.parent / 'logs'
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / f'bot_{datetime.now().strftime("%Y%m%d")}.log'
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Buffer circulaire pour les derniers logs (pour /logs Telegram)
+log_buffer = deque(maxlen=50)  # Garde les 50 derniers logs
+
+class TelegramLogHandler(logging.Handler):
+    """Handler personnalisé pour capturer les logs dans le buffer"""
+    def emit(self, record):
+        log_entry = self.format(record)
+        log_buffer.append(log_entry)
+
+# Ajouter le handler au logger
+telegram_handler = TelegramLogHandler()
+telegram_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+logger.addHandler(telegram_handler)
 
 
 class HedgePosition:
@@ -123,6 +154,11 @@ class BitgetHedgeBotV2:
 
         # Telegram bot (commandes)
         self.last_telegram_update_id = 0
+
+        # Vérification automatique
+        self.last_health_check = time.time()
+        self.health_check_interval = 60  # Vérifier toutes les 60 secondes
+        self.error_count = 0
 
     def send_telegram(self, message):
         """Envoie message Telegram"""
@@ -283,10 +319,37 @@ Balance disponible: ${balance:.0f}€
 ♻️ /restart - Redémarrer le bot
 ⏹️ /stop - Arrêter le bot (nécessite confirmation)
 📊 /status - État système détaillé
+📜 /logs - Voir les derniers logs
 
 ⚠️ <b>Attention:</b> Ces commandes affectent le bot!
 """
             self.send_telegram(message)
+
+        elif command == '/logs':
+            try:
+                if not log_buffer:
+                    self.send_telegram("📜 Aucun log disponible")
+                    return
+
+                # Prendre les 20 derniers logs
+                recent_logs = list(log_buffer)[-20:]
+                logs_text = "\n".join(recent_logs)
+
+                # Tronquer si trop long (limite Telegram 4096 caractères)
+                if len(logs_text) > 3500:
+                    logs_text = logs_text[-3500:]
+                    logs_text = "...\n" + logs_text
+
+                message = f"""
+📜 <b>DERNIERS LOGS</b>
+
+<pre>{logs_text}</pre>
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+            except Exception as e:
+                self.send_telegram(f"❌ Erreur logs: {e}")
 
         elif command == '/status':
             # Status système détaillé
@@ -329,30 +392,33 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                 self.send_telegram(f"⚠️ Erreur status: {e}")
 
         elif command == '/update':
+            logger.info("Commande /update reçue")
             self.send_telegram("🔄 <b>MISE À JOUR EN COURS...</b>\n\n⏳ Récupération depuis GitHub...")
 
             try:
                 # Git pull
                 git_pull = subprocess.run(['git', 'pull'],
                                         capture_output=True, text=True,
-                                        cwd=Path(__file__).parent.parent)
+                                        cwd=Path(__file__).parent.parent,
+                                        timeout=30)
 
                 if git_pull.returncode == 0:
                     output = git_pull.stdout.strip()
+                    logger.info(f"Git pull output: {output}")
 
                     if "Already up to date" in output:
                         self.send_telegram("✅ Déjà à jour!\n\n🔄 Redémarrage du bot...")
                     else:
                         self.send_telegram(f"✅ Mise à jour réussie!\n\n📦 Changements:\n{output[:200]}...\n\n🔄 Redémarrage...")
 
-                    time.sleep(2)
+                    time.sleep(1)
 
-                    # Créer script de redémarrage
+                    # Créer script de redémarrage utilisant start_bot.sh
                     restart_script = """#!/bin/bash
 cd ~/eth-futures-bot
 screen -X -S trading quit
-sleep 2
-screen -dmS trading python3 bot/bitget_hedge_fibonacci_v2.py
+sleep 3
+screen -dmS trading bash -c './start_bot.sh'
 """
 
                     # Écrire et exécuter le script
@@ -360,44 +426,55 @@ screen -dmS trading python3 bot/bitget_hedge_fibonacci_v2.py
                     script_path.write_text(restart_script)
                     script_path.chmod(0o755)
 
+                    logger.info("Lancement du script de redémarrage")
+                    self.send_telegram("🚀 Redémarrage en cours...\n\nVous recevrez un message quand le bot sera prêt.")
+
                     # Lancer le redémarrage en arrière-plan
                     subprocess.Popen(['bash', str(script_path)])
 
-                    self.send_telegram("🚀 Bot redémarré avec la nouvelle version!")
                     time.sleep(1)
                     sys.exit(0)  # Arrêter cette instance
 
                 else:
-                    self.send_telegram(f"❌ Erreur git pull:\n{git_pull.stderr}")
+                    error_msg = f"❌ Erreur git pull:\n{git_pull.stderr}"
+                    logger.error(error_msg)
+                    self.send_telegram(error_msg)
 
             except Exception as e:
-                self.send_telegram(f"❌ Erreur mise à jour: {e}")
+                error_msg = f"❌ Erreur mise à jour: {e}"
+                logger.error(error_msg)
+                self.send_telegram(error_msg)
 
         elif command == '/restart':
+            logger.info("Commande /restart reçue")
             self.send_telegram("♻️ <b>REDÉMARRAGE DU BOT...</b>")
             time.sleep(1)
 
             try:
-                # Script de redémarrage
+                # Script de redémarrage utilisant start_bot.sh
                 restart_script = """#!/bin/bash
 cd ~/eth-futures-bot
 screen -X -S trading quit
-sleep 2
-screen -dmS trading python3 bot/bitget_hedge_fibonacci_v2.py
+sleep 3
+screen -dmS trading bash -c './start_bot.sh'
 """
 
                 script_path = Path('/tmp/restart_bot.sh')
                 script_path.write_text(restart_script)
                 script_path.chmod(0o755)
 
+                logger.info("Lancement du script de redémarrage")
+                self.send_telegram("🚀 Redémarrage...\n\nVous recevrez un message quand le bot sera prêt.")
+
                 subprocess.Popen(['bash', str(script_path)])
 
-                self.send_telegram("✅ Bot redémarré!")
                 time.sleep(1)
                 sys.exit(0)
 
             except Exception as e:
-                self.send_telegram(f"❌ Erreur redémarrage: {e}")
+                error_msg = f"❌ Erreur redémarrage: {e}"
+                logger.error(error_msg)
+                self.send_telegram(error_msg)
 
         elif command.startswith('/stop'):
             # Demander confirmation
@@ -1260,42 +1337,63 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         cleanup_report = []
 
         try:
-            # 1. FERMER TOUTES LES POSITIONS OUVERTES
+            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC VÉRIFICATION)
             for pair in self.volatile_pairs:
                 try:
                     positions = self.exchange.fetch_positions(symbols=[pair])
                     for pos in positions:
-                        if float(pos.get('contracts', 0)) > 0:
+                        size = float(pos.get('contracts', 0))
+                        if size > 0:
                             side = pos.get('side', '').lower()
-                            size = float(pos['contracts'])
                             symbol = pos['symbol']
 
+                            logger.info(f"Fermeture position {side} sur {symbol}: {size} contrats")
                             print(f"   🔴 Fermeture position {side} sur {symbol}: {size} contrats")
 
-                            # Fermer la position avec un ordre market opposé
+                            # Fermer la position avec un ordre market opposé ET reduceOnly
                             if side == 'long':
                                 close_order = self.exchange.create_order(
                                     symbol=symbol,
                                     type='market',
                                     side='sell',
                                     amount=size,
-                                    params={'tradeSide': 'close'}
+                                    params={'tradeSide': 'close', 'reduceOnly': True}
                                 )
-                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]}")
+                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]} ({size:.2f})")
                             elif side == 'short':
                                 close_order = self.exchange.create_order(
                                     symbol=symbol,
                                     type='market',
                                     side='buy',
                                     amount=size,
-                                    params={'tradeSide': 'close'}
+                                    params={'tradeSide': 'close', 'reduceOnly': True}
                                 )
-                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]}")
+                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]} ({size:.2f})")
 
-                            time.sleep(0.5)  # Petit délai entre les fermetures
+                            time.sleep(1)  # Attendre exécution
+
+                            # VÉRIFIER que la position est bien fermée à 100%
+                            time.sleep(1)
+                            verify_pos = self.exchange.fetch_positions(symbols=[pair])
+                            for vpos in verify_pos:
+                                if vpos.get('side', '').lower() == side:
+                                    remaining = float(vpos.get('contracts', 0))
+                                    if remaining > 0:
+                                        logger.warning(f"⚠️ Position {side} pas complètement fermée: {remaining} reste")
+                                        # Tenter de fermer à nouveau
+                                        self.exchange.create_order(
+                                            symbol=symbol,
+                                            type='market',
+                                            side='sell' if side == 'long' else 'buy',
+                                            amount=remaining,
+                                            params={'tradeSide': 'close', 'reduceOnly': True}
+                                        )
+                                        logger.info(f"✅ Fermeture complète position {side}")
 
                 except Exception as e:
-                    print(f"   ⚠️  Erreur fermeture positions {pair}: {e}")
+                    error_msg = f"Erreur fermeture positions {pair}: {e}"
+                    logger.error(error_msg)
+                    print(f"   ⚠️  {error_msg}")
 
             # 2. ANNULER TOUS LES ORDRES LIMITES EN ATTENTE
             for pair in self.volatile_pairs:
@@ -1362,6 +1460,125 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
         # Attendre un peu avant de commencer
         time.sleep(2)
+
+    def perform_health_check(self):
+        """
+        Vérification automatique de la santé du bot
+        Vérifie l'état API, la cohérence des positions, les erreurs
+        Envoie un rapport sur Telegram toutes les 60 secondes
+        """
+        current_time = time.time()
+
+        # Ne vérifier que toutes les 60 secondes
+        if current_time - self.last_health_check < self.health_check_interval:
+            return
+
+        self.last_health_check = current_time
+
+        try:
+            logger.info("=== HEALTH CHECK DÉMARRÉ ===")
+            issues = []
+            warnings = []
+
+            # 1. VÉRIFIER CONNEXION API
+            try:
+                balance = self.exchange.fetch_balance()
+                logger.info("✅ API Bitget: OK")
+            except Exception as e:
+                issues.append(f"❌ API Bitget: {str(e)[:50]}")
+                logger.error(f"API Error: {e}")
+                self.error_count += 1
+
+            # 2. VÉRIFIER COHÉRENCE DES POSITIONS
+            for pair in self.volatile_pairs:
+                try:
+                    real_pos = self.get_real_positions(pair)
+                    if real_pos:
+                        long_data = real_pos.get('long')
+                        short_data = real_pos.get('short')
+
+                        # Vérifier si hedge équilibré
+                        if long_data and short_data:
+                            long_size = long_data['size']
+                            short_size = short_data['size']
+
+                            # Tolérance de 1% de différence
+                            if abs(long_size - short_size) / max(long_size, short_size) > 0.01:
+                                warnings.append(f"⚠️ {pair.split('/')[0]}: Hedge déséquilibré (L:{long_size:.2f} S:{short_size:.2f})")
+                                logger.warning(f"Hedge déséquilibré sur {pair}")
+
+                        # Vérifier P&L extrême
+                        if long_data and abs(long_data.get('unrealized_pnl', 0)) > 50:
+                            warnings.append(f"⚠️ {pair.split('/')[0]}: PNL Long élevé (${long_data['unrealized_pnl']:+.2f})")
+
+                        if short_data and abs(short_data.get('unrealized_pnl', 0)) > 50:
+                            warnings.append(f"⚠️ {pair.split('/')[0]}: PNL Short élevé (${short_data['unrealized_pnl']:+.2f})")
+
+                except Exception as e:
+                    issues.append(f"❌ Vérif {pair.split('/')[0]}: {str(e)[:30]}")
+                    logger.error(f"Position check error {pair}: {e}")
+
+            # 3. VÉRIFIER LES ORDRES EN ATTENTE
+            total_orders = 0
+            for pair in self.volatile_pairs:
+                try:
+                    open_orders = self.exchange.fetch_open_orders(symbol=pair)
+                    total_orders += len(open_orders)
+                except:
+                    pass
+
+            # 4. CONSTRUIRE RAPPORT
+            if issues:
+                # Problèmes critiques détectés
+                message = f"""
+🚨 <b>ALERTE - Problèmes détectés</b>
+
+{chr(10).join(issues[:5])}
+
+Erreurs totales: {self.error_count}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                logger.warning(f"Health check: {len(issues)} issues")
+
+            elif warnings:
+                # Avertissements seulement
+                message = f"""
+⚠️ <b>Health Check: Avertissements</b>
+
+{chr(10).join(warnings[:5])}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                logger.info(f"Health check: {len(warnings)} warnings")
+
+            else:
+                # Tout va bien - message simple
+                positions_count = len(self.active_positions)
+                message = f"""
+✅ <b>Système OK</b>
+
+📊 Positions: {positions_count}
+📝 Ordres actifs: {total_orders}
+🔧 API: Opérationnelle
+💾 Erreurs: {self.error_count}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                logger.info("Health check: All OK")
+
+                # Réinitialiser le compteur d'erreurs si tout va bien
+                if self.error_count > 0:
+                    self.error_count = max(0, self.error_count - 1)
+
+            logger.info("=== HEALTH CHECK TERMINÉ ===")
+
+        except Exception as e:
+            logger.error(f"Erreur lors du health check: {e}")
+            self.send_telegram(f"❌ Erreur health check: {e}")
 
     def send_status_telegram(self):
         """Envoie status détaillé sur Telegram toutes les 60s (1 minute)"""
@@ -1498,20 +1715,22 @@ Bitget API: {'✅' if self.api_key else '❌'}
 ✅ Hedge automatique avec TP/SL
 ✅ Grille Fibonacci adaptive
 ✅ Nettoyage auto au démarrage
+✅ Vérification santé toutes les 60s
+✅ Logs détaillés sauvegardés
 
 🪙 Paires: {', '.join([p.split('/')[0] for p in self.volatile_pairs])}
 
-📲 <b>Commandes principales:</b>
-/pnl - P&L et performance
-/positions - Positions actives
-/status - État du système
-/admin - Commandes admin
-/help - Toutes les commandes
+📲 <b>Commandes:</b>
+/pnl /positions /balance /history
+/status /logs /admin /help
 
-🔄 <b>Contrôle à distance activé!</b>
-Utilisez /admin pour voir les commandes de contrôle
+🔄 <b>Contrôle à distance:</b>
+/update - Mise à jour GitHub
+/restart - Redémarrage
+/stop - Arrêt sécurisé
 
-📊 Rapport auto: Toutes les 60 secondes
+🛡️ Health Check: Vérifie API, positions, ordres
+📊 Rapport système: Toutes les 60 secondes
 🌐 Serveur: Oracle Cloud (Marseille)
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -1570,8 +1789,11 @@ Utilisez /admin pour voir les commandes de contrôle
                 if iteration % 2 == 0:
                     self.check_telegram_commands()
 
-                # Status Telegram
-                self.send_status_telegram()
+                # VÉRIFICATION AUTOMATIQUE DE SANTÉ (toutes les 60 secondes)
+                self.perform_health_check()
+
+                # Status Telegram (désactivé car remplacé par health check)
+                # self.send_status_telegram()
 
                 # Status console
                 if iteration % 30 == 0 and self.active_positions:
