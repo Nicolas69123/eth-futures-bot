@@ -249,34 +249,52 @@ class BitgetHedgeBotV2:
             self.send_telegram(message)
 
         elif command == '/positions':
-            # Afficher seulement les positions ouvertes
-            if not self.active_positions:
-                self.send_telegram("⚠️ Aucune position active")
-                return
-
+            # Afficher positions avec VRAIES données API détaillées
             message_parts = ["📊 <b>POSITIONS OUVERTES</b>\n"]
 
-            for pair in self.active_positions:
+            has_positions = False
+            for pair in self.volatile_pairs:
                 real_pos = self.get_real_positions(pair)
-                price = self.get_price(pair)
-
-                if not real_pos or not price:
+                if not real_pos:
                     continue
 
                 long_data = real_pos.get('long')
                 short_data = real_pos.get('short')
 
+                if not long_data and not short_data:
+                    continue
+
+                has_positions = True
                 pair_name = pair.split('/')[0]
-                message_parts.append(f"\n<b>{pair_name}</b> - {self.format_price(price, pair)}")
+                current_price = self.get_price(pair)
 
+                message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
+                message_parts.append(f"💰 Prix: ${current_price:.5f}\n")
+
+                # LONG
                 if long_data:
-                    message_parts.append(f"\n📈 Long: {self.format_price(long_data['entry_price'], pair)} | P&L: ${long_data['unrealized_pnl']:+.2f}")
+                    message_parts.append(f"📈 <b>LONG</b>")
+                    message_parts.append(f"   {long_data['size']:.0f} contrats @ ${long_data['entry_price']:.5f}")
+                    message_parts.append(f"   Marge: {long_data['margin']:.4f} USDT")
+                    message_parts.append(f"   P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"   ROE: {long_data['pnl_percentage']:+.2f}%\n")
 
+                # SHORT
                 if short_data:
-                    message_parts.append(f"\n📉 Short: {self.format_price(short_data['entry_price'], pair)} | P&L: ${short_data['unrealized_pnl']:+.2f}")
+                    message_parts.append(f"📉 <b>SHORT</b>")
+                    message_parts.append(f"   {short_data['size']:.0f} contrats @ ${short_data['entry_price']:.5f}")
+                    message_parts.append(f"   Marge: {short_data['margin']:.4f} USDT")
+                    message_parts.append(f"   P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"   ROE: {short_data['pnl_percentage']:+.2f}%")
+                    if short_data.get('liquidation_price', 0) > 0:
+                        message_parts.append(f"   💀 Liq: ${short_data['liquidation_price']:.5f}")
 
-            message_parts.append(f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}")
-            self.send_telegram("".join(message_parts))
+            if not has_positions:
+                self.send_telegram("⚠️ Aucune position active")
+                return
+
+            message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+            self.send_telegram("\n".join(message_parts))
 
         elif command == '/history':
             # Afficher historique des P&L
@@ -400,28 +418,55 @@ Balance disponible: ${balance:.0f}€
                 self.send_telegram(error_msg)
 
         elif command == '/checkapi':
-            # Vérifier les positions réelles sur l'API Bitget
+            # Vérifier positions réelles avec TOUTES les données API Bitget
             self.send_telegram("🔍 <b>VÉRIFICATION API BITGET...</b>")
 
             try:
                 report = ["📊 <b>POSITIONS RÉELLES (API)</b>\n"]
+                has_positions = False
 
                 for pair in self.volatile_pairs:
                     real_pos = self.get_real_positions(pair)
-                    if real_pos and (real_pos.get('long') or real_pos.get('short')):
-                        report.append(f"\n<b>{pair.split('/')[0]}</b>")
+                    if not real_pos:
+                        continue
 
-                        if real_pos.get('long'):
-                            ld = real_pos['long']
-                            report.append(f"📈 LONG: {ld['size']:.2f} @ {self.format_price(ld['entry_price'], pair)}")
-                            report.append(f"   PNL: ${ld['unrealized_pnl']:+.2f}")
+                    long_data = real_pos.get('long')
+                    short_data = real_pos.get('short')
 
-                        if real_pos.get('short'):
-                            sd = real_pos['short']
-                            report.append(f"📉 SHORT: {sd['size']:.2f} @ {self.format_price(sd['entry_price'], pair)}")
-                            report.append(f"   PNL: ${sd['unrealized_pnl']:+.2f}")
+                    if not long_data and not short_data:
+                        continue
 
-                if len(report) == 1:
+                    has_positions = True
+                    pair_name = pair.split('/')[0]
+                    current_price = self.get_price(pair)
+
+                    report.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
+                    report.append(f"💰 Mark Price: ${current_price:.5f}\n")
+
+                    # LONG - Détails complets
+                    if long_data:
+                        report.append(f"📈 <b>LONG</b>")
+                        report.append(f"   Contrats: {long_data['size']:.0f}")
+                        report.append(f"   Entrée: ${long_data['entry_price']:.5f}")
+                        report.append(f"   Break-even: ${long_data.get('mark_price', current_price):.5f}")
+                        report.append(f"   Marge: {long_data['margin']:.4f} USDT")
+                        report.append(f"   P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"   ROE: {long_data['pnl_percentage']:+.2f}%\n")
+
+                    # SHORT - Détails complets
+                    if short_data:
+                        report.append(f"📉 <b>SHORT</b>")
+                        report.append(f"   Contrats: {short_data['size']:.0f}")
+                        report.append(f"   Entrée: ${short_data['entry_price']:.5f}")
+                        report.append(f"   Break-even: ${short_data.get('mark_price', current_price):.5f}")
+                        report.append(f"   Marge: {short_data['margin']:.4f} USDT")
+                        report.append(f"   P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"   ROE: {short_data['pnl_percentage']:+.2f}%")
+                        liq = short_data.get('liquidation_price', 0)
+                        if liq > 0:
+                            report.append(f"   💀 Liquidation: ${liq:.5f}")
+
+                if not has_positions:
                     report.append("\n✅ Aucune position ouverte")
 
                 report.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
@@ -1218,27 +1263,44 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             self.capital_used += self.INITIAL_MARGIN * 2
             self.available_pairs.remove(pair)
 
-            # Telegram
-            message = f"""
+            # Récupérer les VRAIES données API après ouverture
+            final_real_pos = self.get_real_positions(pair)
+            if final_real_pos:
+                long_final = final_real_pos.get('long')
+                short_final = final_real_pos.get('short')
+
+                # Message Telegram avec VRAIES données
+                message_parts = [f"🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>\n"]
+
+                if long_final:
+                    message_parts.append(f"📈 <b>LONG</b>")
+                    message_parts.append(f"   {long_final['size']:.0f} contrats @ ${long_final['entry_price']:.5f}")
+                    message_parts.append(f"   Marge: {long_final['margin']:.4f} USDT\n")
+
+                if short_final:
+                    message_parts.append(f"📉 <b>SHORT</b>")
+                    message_parts.append(f"   {short_final['size']:.0f} contrats @ ${short_final['entry_price']:.5f}")
+                    message_parts.append(f"   Marge: {short_final['margin']:.4f} USDT\n")
+
+                message_parts.append(f"⚡ Levier: x{self.LEVERAGE}")
+                message_parts.append(f"\n📝 <b>Ordres actifs:</b>")
+                message_parts.append(f"⬆️ Si +{next_trigger_pct}%: TP Long + Doubler Short")
+                message_parts.append(f"⬇️ Si -{next_trigger_pct}%: TP Short + Doubler Long")
+                message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+
+                self.send_telegram("\n".join(message_parts))
+            else:
+                # Fallback si impossible de récupérer données
+                message = f"""
 🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>
 
-📈 Long: {self.format_price(entry_long, pair)}
-📉 Short: {self.format_price(entry_short, pair)}
+📈 Long: ${entry_long:.5f}
+📉 Short: ${entry_short:.5f}
 ⚡ Levier: x{self.LEVERAGE}
-
-📝 <b>Ordres limites placés:</b>
-
-⬆️ Si hausse +{next_trigger_pct}% ({self.format_price(tp_long_price, pair)}):
-   → TP Long
-   → Doubler Short
-
-⬇️ Si baisse -{next_trigger_pct}% ({self.format_price(tp_short_price, pair)}):
-   → TP Short
-   → Doubler Long
 
 ⏰ {datetime.now().strftime('%H:%M:%S')}
 """
-            self.send_telegram(message)
+                self.send_telegram(message)
 
             return True
 
@@ -1352,6 +1414,32 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     position.current_level += 1
                     self.place_next_level_orders(pair, position, direction='up')
 
+                    # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
+                    time.sleep(2)
+                    final_pos = self.get_real_positions(pair)
+                    if final_pos:
+                        message_parts = [f"🔔 <b>TP LONG EXÉCUTÉ - {pair.split('/')[0]}</b>\n"]
+                        message_parts.append(f"💰 Prix TP: ${current_price:.5f}")
+                        message_parts.append(f"💵 Profit réalisé: ~{long_profit:+.4f} USDT\n")
+
+                        # Short (doublé)
+                        if final_pos.get('short'):
+                            sd = final_pos['short']
+                            message_parts.append(f"📉 <b>SHORT</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"   {sd['size']:.0f} contrats @ ${sd['entry_price']:.5f}")
+                            message_parts.append(f"   Marge: {sd['margin']:.4f} USDT")
+                            message_parts.append(f"   P&L: {sd['unrealized_pnl']:+.4f} USDT ({sd['pnl_percentage']:+.2f}%)\n")
+
+                        # Long (réouvert)
+                        if final_pos.get('long'):
+                            ld = final_pos['long']
+                            message_parts.append(f"📈 <b>LONG</b> (réouvert - Fib 0)")
+                            message_parts.append(f"   {ld['size']:.0f} contrats @ ${ld['entry_price']:.5f}")
+                            message_parts.append(f"   Marge: {ld['margin']:.4f} USDT")
+
+                        message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                        self.send_telegram("\n".join(message_parts))
+
                     # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
                     # self.open_next_hedge()  # DÉSACTIVÉ
 
@@ -1429,6 +1517,32 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     # Replacer ordres au niveau Fibonacci suivant
                     position.current_level += 1
                     self.place_next_level_orders(pair, position, direction='down')
+
+                    # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
+                    time.sleep(2)
+                    final_pos = self.get_real_positions(pair)
+                    if final_pos:
+                        message_parts = [f"🔔 <b>TP SHORT EXÉCUTÉ - {pair.split('/')[0]}</b>\n"]
+                        message_parts.append(f"💰 Prix TP: ${current_price:.5f}")
+                        message_parts.append(f"💵 Profit réalisé: ~{short_profit:+.4f} USDT\n")
+
+                        # Long (doublé)
+                        if final_pos.get('long'):
+                            ld = final_pos['long']
+                            message_parts.append(f"📈 <b>LONG</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"   {ld['size']:.0f} contrats @ ${ld['entry_price']:.5f}")
+                            message_parts.append(f"   Marge: {ld['margin']:.4f} USDT")
+                            message_parts.append(f"   P&L: {ld['unrealized_pnl']:+.4f} USDT ({ld['pnl_percentage']:+.2f}%)\n")
+
+                        # Short (réouvert)
+                        if final_pos.get('short'):
+                            sd = final_pos['short']
+                            message_parts.append(f"📉 <b>SHORT</b> (réouvert - Fib 0)")
+                            message_parts.append(f"   {sd['size']:.0f} contrats @ ${sd['entry_price']:.5f}")
+                            message_parts.append(f"   Marge: {sd['margin']:.4f} USDT")
+
+                        message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                        self.send_telegram("\n".join(message_parts))
 
                     # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
                     # self.open_next_hedge()  # DÉSACTIVÉ
@@ -1868,7 +1982,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 except:
                     pass
 
-            # 4. CONSTRUIRE RAPPORT
+            # 4. CONSTRUIRE RAPPORT DÉTAILLÉ AVEC VRAIES DONNÉES API
             if issues:
                 # Problèmes critiques détectés
                 message = f"""
@@ -1884,7 +1998,7 @@ Erreurs totales: {self.error_count}
                 logger.warning(f"Health check: {len(issues)} issues")
 
             elif warnings:
-                # Avertissements seulement
+                # Avertissements - afficher les vraies données
                 message = f"""
 ⚠️ <b>Health Check: Avertissements</b>
 
@@ -1896,20 +2010,72 @@ Erreurs totales: {self.error_count}
                 logger.info(f"Health check: {len(warnings)} warnings")
 
             else:
-                # Tout va bien - message simple
-                positions_count = len(self.active_positions)
-                message = f"""
-✅ <b>Système OK</b>
+                # Tout va bien - RAPPORT DÉTAILLÉ AVEC VRAIES DONNÉES API
+                message_parts = ["✅ <b>SYSTÈME OK</b>\n"]
 
-📊 Positions: {positions_count}
-📝 Ordres actifs: {total_orders}
-🔧 API: Opérationnelle
-💾 Erreurs: {self.error_count}
+                # Parcourir chaque paire active et afficher VRAIES données
+                for pair in self.volatile_pairs:
+                    try:
+                        real_pos = self.get_real_positions(pair)
+                        if not real_pos:
+                            continue
 
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-                self.send_telegram(message)
-                logger.info("Health check: All OK")
+                        long_data = real_pos.get('long')
+                        short_data = real_pos.get('short')
+
+                        # Si au moins une position existe sur cette paire
+                        if long_data or short_data:
+                            pair_name = pair.split('/')[0]
+                            current_price = self.get_price(pair)
+
+                            message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
+                            message_parts.append(f"💰 Prix: ${current_price:.5f}\n")
+
+                            # LONG (si ouvert)
+                            if long_data:
+                                contracts = long_data['size']
+                                entry = long_data['entry_price']
+                                margin = long_data['margin']
+                                pnl = long_data['unrealized_pnl']
+                                roe = long_data['pnl_percentage']
+
+                                message_parts.append(f"📈 <b>LONG</b>")
+                                message_parts.append(f"   Contrats: {contracts:.0f}")
+                                message_parts.append(f"   Entrée: ${entry:.5f}")
+                                message_parts.append(f"   Marge: {margin:.4f} USDT")
+                                message_parts.append(f"   P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"   ROE: {roe:+.2f}%\n")
+
+                            # SHORT (si ouvert)
+                            if short_data:
+                                contracts = short_data['size']
+                                entry = short_data['entry_price']
+                                margin = short_data['margin']
+                                pnl = short_data['unrealized_pnl']
+                                roe = short_data['pnl_percentage']
+                                liq_price = short_data.get('liquidation_price', 0)
+
+                                message_parts.append(f"📉 <b>SHORT</b>")
+                                message_parts.append(f"   Contrats: {contracts:.0f}")
+                                message_parts.append(f"   Entrée: ${entry:.5f}")
+                                message_parts.append(f"   Marge: {margin:.4f} USDT")
+                                message_parts.append(f"   P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"   ROE: {roe:+.2f}%")
+                                if liq_price > 0:
+                                    message_parts.append(f"   💀 Liq: ${liq_price:.5f}")
+
+                    except Exception as e:
+                        logger.error(f"Erreur affichage {pair}: {e}")
+
+                # Footer avec résumé
+                message_parts.append(f"\n━━━━━━━━━━━━━━")
+                message_parts.append(f"📝 Ordres: {total_orders}")
+                message_parts.append(f"🔧 API: OK")
+                message_parts.append(f"🐛 Erreurs: {self.error_count}")
+                message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+
+                self.send_telegram("\n".join(message_parts))
+                logger.info("Health check: All OK - Detailed report sent")
 
                 # Réinitialiser le compteur d'erreurs si tout va bien
                 if self.error_count > 0:
