@@ -2109,10 +2109,10 @@ Erreurs totales: {self.error_count}
         startup_test = f"""
 🚀 <b>BOT DÉMARRAGE</b>
 
-Railway/Serveur: ✅
-Python: ✅
-Telegram: {'✅' if self.telegram_token else '❌'}
-Bitget API: {'✅' if self.api_key else '❌'}
+🌐 Oracle Cloud: ✅
+🐍 Python: ✅
+📱 Telegram: {'✅' if self.telegram_token else '❌'}
+🔑 Bitget API: {'✅' if self.api_key else '❌'}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
