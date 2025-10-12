@@ -319,13 +319,37 @@ Balance disponible: ${balance:.0f}€
 ♻️ /restart - Redémarrer le bot
 🧹 /cleanup - Fermer TOUTES les positions et ordres
 🔍 /checkapi - Vérifier positions réelles sur Bitget API
+📜 /logs - Voir les derniers logs du bot
+🐛 /debugrestart - Voir le log du dernier redémarrage
 ⏹️ /stop - Arrêter le bot (nécessite confirmation)
 📊 /status - État système détaillé
-📜 /logs - Voir les derniers logs
 
 ⚠️ <b>Attention:</b> Ces commandes affectent le bot!
 """
             self.send_telegram(message)
+
+        elif command == '/debugrestart':
+            # Lire le log du script de redémarrage
+            try:
+                restart_log_path = Path('/tmp/bot_restart.log')
+                if restart_log_path.exists():
+                    log_content = restart_log_path.read_text()
+                    # Prendre les 30 dernières lignes
+                    log_lines = log_content.split('\n')[-30:]
+                    log_text = '\n'.join(log_lines)
+
+                    message = f"""
+🐛 <b>LOG REDÉMARRAGE</b>
+
+<pre>{log_text[:3000]}</pre>
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                    self.send_telegram(message)
+                else:
+                    self.send_telegram("📝 Aucun log de redémarrage trouvé.\n\nLe bot n'a jamais utilisé /update ou /restart.")
+            except Exception as e:
+                self.send_telegram(f"❌ Erreur lecture log: {e}")
 
         elif command == '/cleanup':
             self.send_telegram("🧹 <b>NETTOYAGE FORCÉ...</b>\n\nFermeture de toutes les positions et ordres...")
@@ -473,12 +497,43 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
 
                     time.sleep(1)
 
-                    # Créer script de redémarrage utilisant start_bot.sh
+                    # Créer script de redémarrage ROBUSTE
                     restart_script = """#!/bin/bash
+set -e  # Arrêter si erreur
+
+# Log du script
+exec > /tmp/bot_restart.log 2>&1
+echo "=== DÉBUT REDÉMARRAGE $(date) ==="
+
 cd ~/eth-futures-bot
-screen -X -S trading quit
+
+# Arrêter l'ancienne instance
+echo "Arrêt de l'instance actuelle..."
+screen -X -S trading quit 2>/dev/null || echo "Aucune session à arrêter"
+
+# Attendre que le processus soit bien terminé
 sleep 3
-screen -dmS trading bash -c './start_bot.sh'
+
+# Vérifier que le dossier existe
+if [ ! -f "./start_bot.sh" ]; then
+    echo "ERREUR: start_bot.sh introuvable!"
+    exit 1
+fi
+
+# Démarrer en screen avec output logging
+echo "Démarrage nouvelle instance..."
+screen -dmS trading bash -c 'cd ~/eth-futures-bot && ./start_bot.sh; exec bash'
+
+# Vérifier que screen a bien démarré
+sleep 2
+if screen -list | grep -q "trading"; then
+    echo "✅ Bot redémarré avec succès - $(date)"
+else
+    echo "❌ Échec du redémarrage - $(date)"
+    exit 1
+fi
+
+echo "=== FIN REDÉMARRAGE $(date) ==="
 """
 
                     # Écrire et exécuter le script
@@ -487,7 +542,7 @@ screen -dmS trading bash -c './start_bot.sh'
                     script_path.chmod(0o755)
 
                     logger.info("Lancement du script de redémarrage")
-                    self.send_telegram("🚀 Redémarrage en cours...\n\nVous recevrez un message quand le bot sera prêt.")
+                    self.send_telegram("🚀 Redémarrage en cours...\n\n⏳ Patientez 10-15 secondes.\n\nVous recevrez le message de démarrage du bot.")
 
                     # Lancer le redémarrage en arrière-plan
                     subprocess.Popen(['bash', str(script_path)])
@@ -511,12 +566,34 @@ screen -dmS trading bash -c './start_bot.sh'
             time.sleep(1)
 
             try:
-                # Script de redémarrage utilisant start_bot.sh
+                # Script de redémarrage ROBUSTE
                 restart_script = """#!/bin/bash
+set -e
+
+exec > /tmp/bot_restart.log 2>&1
+echo "=== DÉBUT REDÉMARRAGE $(date) ==="
+
 cd ~/eth-futures-bot
-screen -X -S trading quit
+screen -X -S trading quit 2>/dev/null || echo "Aucune session à arrêter"
 sleep 3
-screen -dmS trading bash -c './start_bot.sh'
+
+if [ ! -f "./start_bot.sh" ]; then
+    echo "ERREUR: start_bot.sh introuvable!"
+    exit 1
+fi
+
+echo "Démarrage nouvelle instance..."
+screen -dmS trading bash -c 'cd ~/eth-futures-bot && ./start_bot.sh; exec bash'
+
+sleep 2
+if screen -list | grep -q "trading"; then
+    echo "✅ Bot redémarré - $(date)"
+else
+    echo "❌ Échec redémarrage - $(date)"
+    exit 1
+fi
+
+echo "=== FIN REDÉMARRAGE $(date) ==="
 """
 
                 script_path = Path('/tmp/restart_bot.sh')
@@ -524,7 +601,7 @@ screen -dmS trading bash -c './start_bot.sh'
                 script_path.chmod(0o755)
 
                 logger.info("Lancement du script de redémarrage")
-                self.send_telegram("🚀 Redémarrage...\n\nVous recevrez un message quand le bot sera prêt.")
+                self.send_telegram("🚀 Redémarrage...\n\n⏳ Patientez 10-15 secondes.\n\nVous recevrez le message de démarrage.")
 
                 subprocess.Popen(['bash', str(script_path)])
 
