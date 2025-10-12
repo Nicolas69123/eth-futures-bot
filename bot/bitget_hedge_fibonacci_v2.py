@@ -232,17 +232,18 @@ class BitgetHedgeBotV2:
                     if real_pos.get('short'):
                         total_unrealized += real_pos['short']['unrealized_pnl']
 
+            # Récupérer les VRAIS frais depuis l'API
             total_fees = self.get_total_fees()
             pnl_net = self.total_profit + total_unrealized - total_fees
 
             message = f"""
-💰 <b>P&L SESSION</b>
+💰 <b>P&L SESSION (Données API réelles)</b>
 
-💵 P&L Réalisé: ${self.total_profit:+.2f}
-📊 P&L Non Réalisé: ${total_unrealized:+.2f}
-💸 Frais payés: ${total_fees:.2f}
+💵 P&L Réalisé: {self.total_profit:+.7f} USDT
+📊 P&L Non Réalisé: {total_unrealized:+.7f} USDT
+💸 Frais payés (API): {total_fees:.7f} USDT
 ━━━━━━━━━━━━━━━━━
-💎 <b>P&L Net: ${pnl_net:+.2f}</b>
+💎 <b>P&L Net: {pnl_net:+.7f} USDT</b>
 
 ⏰ {datetime.now().strftime('%H:%M:%S')}
 """
@@ -276,8 +277,8 @@ class BitgetHedgeBotV2:
                     message_parts.append(f"🟢 <b>LONG</b>")
                     message_parts.append(f"🟢 Contrats: {long_data['size']:.0f}")
                     message_parts.append(f"🟢 Entrée: ${long_data['entry_price']:.5f}")
-                    message_parts.append(f"🟢 Marge: {long_data['margin']:.4f} USDT")
-                    message_parts.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"🟢 Marge: {long_data['margin']:.7f} USDT")
+                    message_parts.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.7f} USDT")
                     message_parts.append(f"🟢 ROE: {long_data['pnl_percentage']:+.2f}%\n")
 
                 # SHORT - EN ROUGE
@@ -285,8 +286,8 @@ class BitgetHedgeBotV2:
                     message_parts.append(f"🔴 <b>SHORT</b>")
                     message_parts.append(f"🔴 Contrats: {short_data['size']:.0f}")
                     message_parts.append(f"🔴 Entrée: ${short_data['entry_price']:.5f}")
-                    message_parts.append(f"🔴 Marge: {short_data['margin']:.4f} USDT")
-                    message_parts.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                    message_parts.append(f"🔴 Marge: {short_data['margin']:.7f} USDT")
+                    message_parts.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.7f} USDT")
                     message_parts.append(f"🔴 ROE: {short_data['pnl_percentage']:+.2f}%")
                     if short_data.get('liquidation_price', 0) > 0:
                         message_parts.append(f"🔴 💀 Liq: ${short_data['liquidation_price']:.5f}")
@@ -494,8 +495,8 @@ Balance disponible: ${balance:.0f}€
                         report.append(f"🟢 <b>LONG</b>")
                         report.append(f"🟢 Contrats: {long_data['size']:.0f}")
                         report.append(f"🟢 Entrée: ${long_data['entry_price']:.5f}")
-                        report.append(f"🟢 Marge: {long_data['margin']:.4f} USDT")
-                        report.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"🟢 Marge: {long_data['margin']:.7f} USDT")
+                        report.append(f"🟢 P&L: {long_data['unrealized_pnl']:+.7f} USDT")
                         report.append(f"🟢 ROE: {long_data['pnl_percentage']:+.2f}%\n")
 
                     # SHORT - EN ROUGE
@@ -503,8 +504,8 @@ Balance disponible: ${balance:.0f}€
                         report.append(f"🔴 <b>SHORT</b>")
                         report.append(f"🔴 Contrats: {short_data['size']:.0f}")
                         report.append(f"🔴 Entrée: ${short_data['entry_price']:.5f}")
-                        report.append(f"🔴 Marge: {short_data['margin']:.4f} USDT")
-                        report.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.4f} USDT")
+                        report.append(f"🔴 Marge: {short_data['margin']:.7f} USDT")
+                        report.append(f"🔴 P&L: {short_data['unrealized_pnl']:+.7f} USDT")
                         report.append(f"🔴 ROE: {short_data['pnl_percentage']:+.2f}%")
                         liq = short_data.get('liquidation_price', 0)
                         if liq > 0:
@@ -955,27 +956,44 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             return []
 
     def get_total_fees(self):
-        """Récupère le total des frais payés depuis le démarrage du bot (session actuelle)"""
+        """
+        Récupère le total RÉEL des frais payés depuis le démarrage du bot
+        Appels API UNIQUEMENT, PAS d'estimation
+        """
         try:
             total_fees = 0
+            fee_details = []
 
             # Timestamp de début de session (en millisecondes)
             session_start_ms = int(self.session_start_time.timestamp() * 1000)
 
+            logger.info(f"Récupération frais depuis {self.session_start_time.strftime('%H:%M:%S')}")
+
             for pair in self.volatile_pairs:
                 try:
-                    # Récupérer les trades depuis le début de la session
-                    trades = self.exchange.fetch_my_trades(pair, since=session_start_ms, limit=100)
+                    # Récupérer TOUS les trades depuis le début de la session
+                    trades = self.exchange.fetch_my_trades(pair, since=session_start_ms, limit=500)
+
+                    pair_fees = 0
                     for trade in trades:
                         fee = trade.get('fee', {})
                         if fee and fee.get('cost'):
-                            total_fees += float(fee['cost'])
-                except:
-                    pass
+                            fee_cost = float(fee['cost'])
+                            total_fees += fee_cost
+                            pair_fees += fee_cost
 
+                    if pair_fees > 0:
+                        logger.info(f"Frais {pair.split('/')[0]}: {pair_fees:.7f} USDT ({len(trades)} trades)")
+                        fee_details.append(f"{pair.split('/')[0]}: {pair_fees:.7f}")
+
+                except Exception as e:
+                    logger.warning(f"Impossible de récupérer frais pour {pair}: {e}")
+
+            logger.info(f"Total frais session: {total_fees:.7f} USDT")
             return total_fees
 
         except Exception as e:
+            logger.error(f"Erreur get_total_fees: {e}")
             return 0
 
     def set_leverage(self, symbol, leverage):
@@ -1240,13 +1258,13 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     message_parts.append(f"🟢 <b>LONG</b>")
                     message_parts.append(f"🟢 Contrats: {long_final['size']:.0f}")
                     message_parts.append(f"🟢 Entrée: ${long_final['entry_price']:.5f}")
-                    message_parts.append(f"🟢 Marge: {long_final['margin']:.4f} USDT\n")
+                    message_parts.append(f"🟢 Marge: {long_final['margin']:.7f} USDT\n")
 
                 if short_final:
                     message_parts.append(f"🔴 <b>SHORT</b>")
                     message_parts.append(f"🔴 Contrats: {short_final['size']:.0f}")
                     message_parts.append(f"🔴 Entrée: ${short_final['entry_price']:.5f}")
-                    message_parts.append(f"🔴 Marge: {short_final['margin']:.4f} USDT\n")
+                    message_parts.append(f"🔴 Marge: {short_final['margin']:.7f} USDT\n")
 
                 message_parts.append(f"⚡ Levier: x{self.LEVERAGE}")
                 message_parts.append(f"\n📝 <b>Ordres:</b>")
@@ -1394,8 +1412,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             message_parts.append(f"🔴 <b>SHORT</b> (doublé - Fib {position.current_level})")
                             message_parts.append(f"🔴 Contrats: {sd['size']:.0f}")
                             message_parts.append(f"🔴 Entrée: ${sd['entry_price']:.5f}")
-                            message_parts.append(f"🔴 Marge: {sd['margin']:.4f} USDT")
-                            message_parts.append(f"🔴 P&L: {sd['unrealized_pnl']:+.4f} USDT")
+                            message_parts.append(f"🔴 Marge: {sd['margin']:.7f} USDT")
+                            message_parts.append(f"🔴 P&L: {sd['unrealized_pnl']:+.7f} USDT")
                             message_parts.append(f"🔴 ROE: {sd['pnl_percentage']:+.2f}%\n")
 
                         # Long (réouvert) - EN VERT
@@ -1404,7 +1422,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             message_parts.append(f"🟢 <b>LONG</b> (réouvert - Fib 0)")
                             message_parts.append(f"🟢 Contrats: {ld['size']:.0f}")
                             message_parts.append(f"🟢 Entrée: ${ld['entry_price']:.5f}")
-                            message_parts.append(f"🟢 Marge: {ld['margin']:.4f} USDT")
+                            message_parts.append(f"🟢 Marge: {ld['margin']:.7f} USDT")
 
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
@@ -1501,8 +1519,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             message_parts.append(f"🟢 <b>LONG</b> (doublé - Fib {position.current_level})")
                             message_parts.append(f"🟢 Contrats: {ld['size']:.0f}")
                             message_parts.append(f"🟢 Entrée: ${ld['entry_price']:.5f}")
-                            message_parts.append(f"🟢 Marge: {ld['margin']:.4f} USDT")
-                            message_parts.append(f"🟢 P&L: {ld['unrealized_pnl']:+.4f} USDT")
+                            message_parts.append(f"🟢 Marge: {ld['margin']:.7f} USDT")
+                            message_parts.append(f"🟢 P&L: {ld['unrealized_pnl']:+.7f} USDT")
                             message_parts.append(f"🟢 ROE: {ld['pnl_percentage']:+.2f}%\n")
 
                         # Short (réouvert) - EN ROUGE
@@ -1511,7 +1529,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             message_parts.append(f"🔴 <b>SHORT</b> (réouvert - Fib 0)")
                             message_parts.append(f"🔴 Contrats: {sd['size']:.0f}")
                             message_parts.append(f"🔴 Entrée: ${sd['entry_price']:.5f}")
-                            message_parts.append(f"🔴 Marge: {sd['margin']:.4f} USDT")
+                            message_parts.append(f"🔴 Marge: {sd['margin']:.7f} USDT")
 
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
@@ -2033,8 +2051,8 @@ Erreurs totales: {self.error_count}
                                 message_parts.append(f"🟢 <b>LONG</b>")
                                 message_parts.append(f"🟢 Contrats: {contracts:.0f}")
                                 message_parts.append(f"🟢 Entrée: ${entry:.5f}")
-                                message_parts.append(f"🟢 Marge: {margin:.4f} USDT")
-                                message_parts.append(f"🟢 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🟢 Marge: {margin:.7f} USDT")
+                                message_parts.append(f"🟢 P&L: {pnl:+.7f} USDT")
                                 message_parts.append(f"🟢 ROE: {roe:+.2f}%\n")
 
                             # SHORT (si ouvert) - EN ROUGE
@@ -2049,8 +2067,8 @@ Erreurs totales: {self.error_count}
                                 message_parts.append(f"🔴 <b>SHORT</b>")
                                 message_parts.append(f"🔴 Contrats: {contracts:.0f}")
                                 message_parts.append(f"🔴 Entrée: ${entry:.5f}")
-                                message_parts.append(f"🔴 Marge: {margin:.4f} USDT")
-                                message_parts.append(f"🔴 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🔴 Marge: {margin:.7f} USDT")
+                                message_parts.append(f"🔴 P&L: {pnl:+.7f} USDT")
                                 message_parts.append(f"🔴 ROE: {roe:+.2f}%")
                                 if liq_price > 0:
                                     message_parts.append(f"🔴 💀 Liq: ${liq_price:.5f}")
