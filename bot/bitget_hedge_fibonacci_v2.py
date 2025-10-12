@@ -1090,6 +1090,120 @@ Balance disponible: ${balance:.0f}€
             time.sleep(2)
             self.open_hedge_with_limit_orders(next_pair)
 
+    def cleanup_all_positions_and_orders(self):
+        """
+        Nettoie TOUTES les positions et ordres au démarrage
+        Pour repartir sur des bases propres
+        """
+        print("\n🧹 NETTOYAGE DES POSITIONS ET ORDRES EXISTANTS...")
+        self.send_telegram("🧹 <b>Nettoyage session précédente...</b>")
+
+        cleanup_report = []
+
+        try:
+            # 1. FERMER TOUTES LES POSITIONS OUVERTES
+            for pair in self.volatile_pairs:
+                try:
+                    positions = self.exchange.fetch_positions(symbols=[pair])
+                    for pos in positions:
+                        if float(pos.get('contracts', 0)) > 0:
+                            side = pos.get('side', '').lower()
+                            size = float(pos['contracts'])
+                            symbol = pos['symbol']
+
+                            print(f"   🔴 Fermeture position {side} sur {symbol}: {size} contrats")
+
+                            # Fermer la position avec un ordre market opposé
+                            if side == 'long':
+                                close_order = self.exchange.create_order(
+                                    symbol=symbol,
+                                    type='market',
+                                    side='sell',
+                                    amount=size,
+                                    params={'tradeSide': 'close'}
+                                )
+                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]}")
+                            elif side == 'short':
+                                close_order = self.exchange.create_order(
+                                    symbol=symbol,
+                                    type='market',
+                                    side='buy',
+                                    amount=size,
+                                    params={'tradeSide': 'close'}
+                                )
+                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]}")
+
+                            time.sleep(0.5)  # Petit délai entre les fermetures
+
+                except Exception as e:
+                    print(f"   ⚠️  Erreur fermeture positions {pair}: {e}")
+
+            # 2. ANNULER TOUS LES ORDRES LIMITES EN ATTENTE
+            for pair in self.volatile_pairs:
+                try:
+                    # Récupérer tous les ordres ouverts
+                    open_orders = self.exchange.fetch_open_orders(symbol=pair)
+
+                    for order in open_orders:
+                        order_id = order['id']
+                        print(f"   🗑️  Annulation ordre {order['type']} {order['side']} sur {pair}")
+                        self.exchange.cancel_order(order_id, pair)
+                        cleanup_report.append(f"🗑️ Annulé ordre {pair.split('/')[0]}")
+                        time.sleep(0.2)
+
+                except Exception as e:
+                    print(f"   ⚠️  Erreur annulation ordres {pair}: {e}")
+
+            # 3. ANNULER TOUS LES ORDRES TP/SL (PLAN ORDERS)
+            for pair in self.volatile_pairs:
+                try:
+                    tpsl_orders = self.get_tpsl_orders(pair)
+
+                    for order in tpsl_orders:
+                        order_id = order.get('orderId')
+                        plan_type = order.get('planType', '')
+
+                        if order_id:
+                            print(f"   🗑️  Annulation TP/SL {plan_type} sur {pair}")
+                            self.cancel_tpsl_order(order_id, pair)
+                            cleanup_report.append(f"🗑️ Annulé TP/SL {pair.split('/')[0]}")
+                            time.sleep(0.2)
+
+                except Exception as e:
+                    print(f"   ⚠️  Erreur annulation TP/SL {pair}: {e}")
+
+            # 4. RÉINITIALISER LES VARIABLES
+            self.active_positions = {}
+            self.available_pairs = self.volatile_pairs.copy()
+            self.capital_used = 0
+            self.total_profit = 0
+            self.pnl_history = []
+            self.total_fees_paid = 0
+
+            # 5. ENVOYER RAPPORT
+            if cleanup_report:
+                message = f"""
+🧹 <b>NETTOYAGE TERMINÉ</b>
+
+{chr(10).join(cleanup_report[:10])}
+
+✅ Prêt pour nouvelle session!
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                print("✅ Nettoyage terminé!")
+            else:
+                print("✅ Aucune position/ordre à nettoyer")
+                self.send_telegram("✅ Aucune position/ordre à nettoyer")
+
+        except Exception as e:
+            print(f"❌ Erreur pendant le nettoyage: {e}")
+            self.send_telegram(f"⚠️ Erreur nettoyage: {e}")
+
+        # Attendre un peu avant de commencer
+        time.sleep(2)
+
     def send_status_telegram(self):
         """Envoie status détaillé sur Telegram toutes les 60s (1 minute)"""
         current_time = time.time()
@@ -1209,6 +1323,9 @@ Bitget API: {'✅' if self.api_key else '❌'}
         try:
             print("\n📡 Connexion Bitget Testnet...")
             self.exchange.load_markets()
+
+            # NETTOYER TOUTES LES POSITIONS ET ORDRES EXISTANTS
+            self.cleanup_all_positions_and_orders()
 
             # Message démarrage
             startup = f"""
