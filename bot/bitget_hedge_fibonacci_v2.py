@@ -1017,23 +1017,36 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             return False
 
     def cancel_order(self, order_id, symbol):
-        """Annule un ordre (LIMIT ou TP/SL plan)"""
+        """Annule un ordre (LIMIT ou TP/SL plan) avec logging détaillé"""
+        if not order_id:
+            logger.warning(f"Tentative annulation ordre None sur {symbol}")
+            return True
+
+        logger.info(f"Annulation ordre {order_id[:12]}... sur {symbol}")
+
         # Essayer d'annuler comme ordre LIMIT standard
         try:
             self.exchange.cancel_order(order_id, symbol)
+            logger.info(f"✅ Ordre LIMIT {order_id[:12]}... annulé")
             print(f"🗑️  Ordre LIMIT {order_id[:8]}... annulé")
             return True
         except Exception as e:
             error_msg = str(e)
             # Si ordre n'existe pas comme LIMIT, essayer comme TP/SL plan
             if '40768' in error_msg or 'does not exist' in error_msg.lower():
+                logger.info(f"Ordre pas trouvé comme LIMIT, essai comme TP/SL plan...")
                 # Essayer d'annuler comme TP/SL plan
                 try:
-                    return self.cancel_tpsl_order(order_id, symbol)
+                    result = self.cancel_tpsl_order(order_id, symbol)
+                    if result:
+                        logger.info(f"✅ Ordre TP/SL {order_id[:12]}... annulé")
+                    return result
                 except:
+                    logger.info(f"ℹ️ Ordre {order_id[:12]}... déjà exécuté/annulé")
                     print(f"ℹ️  Ordre {order_id[:8]}... déjà exécuté/annulé")
                     return True
             else:
+                logger.error(f"⚠️ Erreur annulation {order_id[:12]}: {e}")
                 print(f"⚠️  Erreur annulation: {e}")
                 return False
 
@@ -2253,23 +2266,36 @@ Erreurs totales: {self.error_count}
 """
             self.send_telegram(startup)
 
-            # Ouvrir hedges sur TOUTES les paires disponibles
-            logger.info(f"Ouverture des hedges sur {len(self.available_pairs)} paires")
-            print(f"\n📊 Ouverture des hedges sur {len(self.available_pairs)} paires...")
+            # Ouvrir hedge sur UNE SEULE paire pour tester (DOGE)
+            logger.info(f"MODE TEST: Ouverture hedge sur DOGE uniquement")
+            print(f"\n📊 MODE TEST: Ouverture hedge sur DOGE uniquement...")
 
-            pairs_to_open = self.available_pairs.copy()
-            for idx, pair in enumerate(pairs_to_open):
-                if self.capital_used >= self.MAX_CAPITAL:
-                    logger.warning(f"Capital max atteint, arrêt ouverture à {idx} paires")
-                    break
+            # Ouvrir SEULEMENT DOGE
+            test_pair = 'DOGE/USDT:USDT'
+            if test_pair in self.available_pairs:
+                logger.info(f"Ouverture hedge: {test_pair}")
+                success = self.open_hedge_with_limit_orders(test_pair)
+                if success:
+                    logger.info(f"✅ Hedge DOGE ouvert avec succès")
+                else:
+                    logger.error(f"❌ Échec ouverture hedge DOGE")
+            else:
+                logger.error(f"DOGE/USDT:USDT pas dans les paires disponibles!")
 
-                logger.info(f"Ouverture hedge {idx+1}/{len(pairs_to_open)}: {pair}")
-                success = self.open_hedge_with_limit_orders(pair)
-
-                if success and idx < len(pairs_to_open) - 1:
-                    # Attendre 3s entre chaque ouverture
-                    logger.info(f"Attente 3s avant prochaine paire...")
-                    time.sleep(3)
+            # NE PAS ouvrir PEPE ni SHIB (mode test)
+            # pairs_to_open = self.available_pairs.copy()
+            # for idx, pair in enumerate(pairs_to_open):
+            #     if self.capital_used >= self.MAX_CAPITAL:
+            #         logger.warning(f"Capital max atteint, arrêt ouverture à {idx} paires")
+            #         break
+            #
+            #     logger.info(f"Ouverture hedge {idx+1}/{len(pairs_to_open)}: {pair}")
+            #     success = self.open_hedge_with_limit_orders(pair)
+            #
+            #     if success and idx < len(pairs_to_open) - 1:
+            #         # Attendre 3s entre chaque ouverture
+            #         logger.info(f"Attente 3s avant prochaine paire...")
+            #         time.sleep(3)
 
             # Boucle
             iteration = 0
