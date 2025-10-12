@@ -133,9 +133,9 @@ nano .env
 
 ```bash
 # Bitget API (Testnet ou Production)
-BITGET_API_KEY=bg_fb4ec5d8fc54a5fe4207f029c36a356e
-BITGET_SECRET=9f1329dd44652f6ed7b9c078144186e4cb0a3923d977ba02eb8c20bdf221f88e
-BITGET_PASSPHRASE=Rery691951
+BITGET_API_KEY=your_api_key_here
+BITGET_SECRET=your_secret_here
+BITGET_PASSPHRASE=your_passphrase_here
 
 # Telegram
 TELEGRAM_BOT_TOKEN=ton_token_ici

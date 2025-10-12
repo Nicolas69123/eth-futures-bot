@@ -1188,8 +1188,22 @@ Balance disponible: ${balance:.0f}€
         print("🚀 BITGET HEDGE BOT V2 - ORDRES LIMITES AUTO")
         print("="*80)
 
+        # Message Telegram immédiat (avant Bitget)
+        startup_test = f"""
+🚀 <b>BOT DÉMARRAGE</b>
+
+Railway/Serveur: ✅
+Python: ✅
+Telegram: {'✅' if self.telegram_token else '❌'}
+Bitget API: {'✅' if self.api_key else '❌'}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        self.send_telegram(startup_test)
+
         if not self.api_key:
             print("❌ Clés API manquantes")
+            self.send_telegram("❌ Clés API Bitget manquantes!")
             return
 
         try:
