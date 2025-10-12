@@ -66,8 +66,8 @@ class HedgePosition:
         self.long_open = True
         self.short_open = True
 
-        # Grille Fibonacci (en % - 0.2% pour marché volatil)
-        self.fib_levels = [0.2, 0.2, 0.4, 0.6, 1.0, 1.6, 2.6, 4.2, 6.8, 11.0]
+        # Grille Fibonacci (en % - 0.3% partout pour stabilité et test)
+        self.fib_levels = [0.3, 0.3, 0.6, 0.9, 1.5, 2.4, 3.9, 6.3, 10.2, 16.5]
         self.current_level = 0
 
         # IDs des ordres actifs
@@ -160,11 +160,6 @@ class BitgetHedgeBotV2:
         self.last_health_check = time.time()
         self.health_check_interval = 60  # Vérifier toutes les 60 secondes
         self.error_count = 0
-
-        # Auto-recovery
-        self.last_order_check = time.time()
-        self.order_check_interval = 30  # Vérifier ordres toutes les 30s
-        self.auto_recovery_count = 0
 
     def load_last_update_id(self):
         """Charge le dernier update_id depuis fichier pour éviter de retraiter les vieux messages"""
@@ -364,7 +359,6 @@ Balance disponible: ${balance:.0f}€
 🔄 /update - Mettre à jour depuis GitHub et redémarrer
 ♻️ /restart - Redémarrer le bot
 🧹 /cleanup - Fermer TOUTES les positions et ordres
-🔨 /forceclose - Force close (essaie 4 méthodes)
 🔍 /checkapi - Vérifier positions réelles sur Bitget API
 📜 /logs - Voir les derniers logs du bot
 🐛 /debugrestart - Voir le log du dernier redémarrage
@@ -480,57 +474,6 @@ Balance disponible: ${balance:.0f}€
 
             except Exception as e:
                 self.send_telegram(f"❌ Erreur vérification API: {e}")
-
-        elif command == '/forceclose':
-            # FERMETURE FORCÉE avec toutes les méthodes possibles
-            self.send_telegram("🔨 <b>FORCE CLOSE - Essai toutes méthodes</b>\n\nFermeture agressive de toutes positions...")
-            logger.info("Commande /forceclose - Fermeture agressive")
-
-            try:
-                closed_positions = []
-                failed_positions = []
-
-                for pair in self.volatile_pairs:
-                    real_pos = self.get_real_positions(pair)
-                    if not real_pos:
-                        continue
-
-                    # Fermer Long si existe
-                    if real_pos.get('long'):
-                        success = self.force_close_position(pair, 'long', real_pos['long']['size'])
-                        if success:
-                            closed_positions.append(f"✅ LONG {pair.split('/')[0]}")
-                        else:
-                            failed_positions.append(f"❌ LONG {pair.split('/')[0]}")
-
-                    # Fermer Short si existe
-                    if real_pos.get('short'):
-                        success = self.force_close_position(pair, 'short', real_pos['short']['size'])
-                        if success:
-                            closed_positions.append(f"✅ SHORT {pair.split('/')[0]}")
-                        else:
-                            failed_positions.append(f"❌ SHORT {pair.split('/')[0]}")
-
-                # Rapport
-                report = ["🔨 <b>FORCE CLOSE TERMINÉ</b>\n"]
-
-                if closed_positions:
-                    report.append("\n<b>Fermées:</b>")
-                    report.extend(closed_positions)
-
-                if failed_positions:
-                    report.append("\n<b>Échecs:</b>")
-                    report.extend(failed_positions)
-                    report.append("\n⚠️ Fermez manuellement sur Bitget")
-
-                if not closed_positions and not failed_positions:
-                    report.append("✅ Aucune position à fermer")
-
-                report.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
-                self.send_telegram("\n".join(report))
-
-            except Exception as e:
-                self.send_telegram(f"❌ Erreur forceclose: {e}")
 
         elif command == '/logs':
             try:
@@ -1074,113 +1017,6 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         except Exception as e:
             print(f"⚠️ Erreur annulation TP/SL: {e}")
             return False
-
-    def force_close_position(self, pair, side, size):
-        """
-        Ferme une position en essayant TOUTES les méthodes possibles
-
-        Args:
-            pair: Paire (ex: 'DOGE/USDT:USDT')
-            side: 'long' ou 'short'
-            size: Taille de la position
-
-        Returns:
-            bool: True si fermé, False sinon
-        """
-        logger.info(f"🔨 Force close {side} {pair} - {size} contrats")
-
-        # Side opposé pour fermer
-        close_side = 'sell' if side == 'long' else 'buy'
-
-        # MÉTHODE 1: Avec holdSide seulement (SANS tradeSide)
-        try:
-            logger.info(f"Méthode 1: holdSide={side}, NO tradeSide")
-            close_order = self.exchange.create_order(
-                symbol=pair,
-                type='market',
-                side=close_side,
-                amount=size,
-                params={'holdSide': side}
-            )
-            logger.info(f"✅ MÉTHODE 1 RÉUSSIE: {close_order.get('id')}")
-            time.sleep(2)
-
-            # Vérifier
-            verify_pos = self.get_real_positions(pair)
-            if verify_pos and verify_pos.get(side) and verify_pos[side]['size'] < size * 0.1:
-                logger.info(f"✅ Position {side} fermée (Méthode 1)")
-                return True
-
-        except Exception as e:
-            logger.warning(f"Méthode 1 échouée: {e}")
-
-        # MÉTHODE 2: reduceOnly=True
-        try:
-            logger.info(f"Méthode 2: reduceOnly=True")
-            close_order = self.exchange.create_order(
-                symbol=pair,
-                type='market',
-                side=close_side,
-                amount=size,
-                params={'reduceOnly': True}
-            )
-            logger.info(f"✅ MÉTHODE 2 RÉUSSIE: {close_order.get('id')}")
-            time.sleep(2)
-
-            # Vérifier
-            verify_pos = self.get_real_positions(pair)
-            if not verify_pos or not verify_pos.get(side):
-                logger.info(f"✅ Position {side} fermée (Méthode 2)")
-                return True
-
-        except Exception as e:
-            logger.warning(f"Méthode 2 échouée: {e}")
-
-        # MÉTHODE 3: Ordre market simple (sans params du tout)
-        try:
-            logger.info(f"Méthode 3: Ordre market simple")
-            close_order = self.exchange.create_order(
-                symbol=pair,
-                type='market',
-                side=close_side,
-                amount=size
-            )
-            logger.info(f"✅ MÉTHODE 3 RÉUSSIE: {close_order.get('id')}")
-            time.sleep(2)
-
-            # Vérifier
-            verify_pos = self.get_real_positions(pair)
-            if not verify_pos or not verify_pos.get(side):
-                logger.info(f"✅ Position {side} fermée (Méthode 3)")
-                return True
-
-        except Exception as e:
-            logger.warning(f"Méthode 3 échouée: {e}")
-
-        # MÉTHODE 4: posSide pour API v2 Bitget
-        try:
-            logger.info(f"Méthode 4: posSide")
-            close_order = self.exchange.create_order(
-                symbol=pair,
-                type='market',
-                side=close_side,
-                amount=size,
-                params={'posSide': side}
-            )
-            logger.info(f"✅ MÉTHODE 4 RÉUSSIE: {close_order.get('id')}")
-            time.sleep(2)
-
-            # Vérifier
-            verify_pos = self.get_real_positions(pair)
-            if not verify_pos or not verify_pos.get(side):
-                logger.info(f"✅ Position {side} fermée (Méthode 4)")
-                return True
-
-        except Exception as e:
-            logger.warning(f"Méthode 4 échouée: {e}")
-
-        logger.error(f"❌ TOUTES LES MÉTHODES ONT ÉCHOUÉ pour {side} {pair}")
-        return False
 
     def open_hedge_with_limit_orders(self, pair):
         """
@@ -1863,7 +1699,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         cleanup_report = []
 
         try:
-            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC FORCE_CLOSE_POSITION)
+            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC VÉRIFICATION)
             for pair in self.volatile_pairs:
                 try:
                     positions = self.exchange.fetch_positions(symbols=[pair])
@@ -1873,18 +1709,69 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             side = pos.get('side', '').lower()
                             symbol = pos['symbol']
 
-                            logger.info(f"Nettoyage: Fermeture position {side} sur {symbol}: {size} contrats")
+                            logger.info(f"Fermeture position {side} sur {symbol}: {size} contrats")
                             print(f"   🔴 Fermeture position {side} sur {symbol}: {size} contrats")
 
-                            # Utiliser force_close_position (essaie 4 méthodes)
-                            success = self.force_close_position(symbol, side, size)
+                            # Fermer la position avec un ordre market opposé - SYNTAXE CORRECTE BITGET
+                            if side == 'long':
+                                logger.info(f"Tentative fermeture LONG: {symbol}, side=sell, amount={size}, holdSide=long")
+                                close_order = self.exchange.create_order(
+                                    symbol=symbol,
+                                    type='market',
+                                    side='sell',
+                                    amount=size,
+                                    params={'tradeSide': 'close', 'holdSide': 'long'}
+                                )
+                                logger.info(f"Ordre fermeture LONG exécuté: {close_order.get('id', 'N/A')}")
+                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]} ({size:.2f})")
+                            elif side == 'short':
+                                logger.info(f"Tentative fermeture SHORT: {symbol}, side=buy, amount={size}, holdSide=short")
+                                close_order = self.exchange.create_order(
+                                    symbol=symbol,
+                                    type='market',
+                                    side='buy',
+                                    amount=size,
+                                    params={'tradeSide': 'close', 'holdSide': 'short'}
+                                )
+                                logger.info(f"Ordre fermeture SHORT exécuté: {close_order.get('id', 'N/A')}")
+                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]} ({size:.2f})")
 
-                            if success:
-                                cleanup_report.append(f"❌ Fermé {side.upper()} {symbol.split('/')[0]} ({size:.0f})")
-                                logger.info(f"✅ Position {side} fermée avec succès")
-                            else:
-                                cleanup_report.append(f"⚠️ Échec fermeture {side.upper()} {symbol.split('/')[0]}")
-                                logger.error(f"❌ Impossible de fermer {side} {symbol}")
+                            time.sleep(2)  # Attendre exécution complète
+
+                            # VÉRIFIER que la position est bien fermée à 100%
+                            max_retries = 3
+                            for retry in range(max_retries):
+                                time.sleep(1)
+                                verify_pos = self.exchange.fetch_positions(symbols=[pair])
+
+                                position_found = False
+                                for vpos in verify_pos:
+                                    if vpos.get('side', '').lower() == side:
+                                        remaining = float(vpos.get('contracts', 0))
+                                        if remaining > 0:
+                                            position_found = True
+                                            logger.warning(f"⚠️ Position {side} pas complètement fermée: {remaining} reste (tentative {retry+1}/{max_retries})")
+                                            print(f"   ⚠️ RESTE {remaining} contrats {side} - Nouvelle tentative...")
+
+                                            # Tenter de fermer à nouveau avec holdSide
+                                            try:
+                                                self.exchange.create_order(
+                                                    symbol=symbol,
+                                                    type='market',
+                                                    side='sell' if side == 'long' else 'buy',
+                                                    amount=remaining,
+                                                    params={'tradeSide': 'close', 'holdSide': side}
+                                                )
+                                                logger.info(f"✅ Fermeture complète position {side} (tentative {retry+1})")
+                                                time.sleep(2)
+                                            except Exception as retry_error:
+                                                logger.error(f"Erreur lors de la fermeture retry: {retry_error}")
+                                                break
+
+                                if not position_found:
+                                    logger.info(f"✅ Position {side} complètement fermée")
+                                    print(f"   ✅ Position {side} 100% fermée")
+                                    break
 
                 except Exception as e:
                     error_msg = f"Erreur fermeture positions {pair}: {e}"
@@ -1957,57 +1844,6 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         # Attendre un peu avant de commencer
         time.sleep(2)
 
-    def auto_recovery_orders(self):
-        """
-        Système d'auto-correction : Vérifie et replace les ordres manquants
-        S'exécute toutes les 30 secondes en arrière-plan
-        """
-        current_time = time.time()
-
-        if current_time - self.last_order_check < self.order_check_interval:
-            return
-
-        self.last_order_check = current_time
-
-        try:
-            logger.info("=== AUTO-RECOVERY: Vérification ordres ===")
-
-            for pair, position in list(self.active_positions.items()):
-                try:
-                    real_pos = self.get_real_positions(pair)
-                    if not real_pos:
-                        continue
-
-                    corrections = []
-
-                    # Vérifier que chaque position ouverte a son TP
-                    if real_pos.get('long') and not position.orders.get('tp_long'):
-                        logger.warning(f"⚠️ TP Long manquant sur {pair} - Replacement...")
-                        corrections.append("TP Long manquant")
-                        # TODO: Replacer le TP Long
-
-                    if real_pos.get('short') and not position.orders.get('tp_short'):
-                        logger.warning(f"⚠️ TP Short manquant sur {pair} - Replacement...")
-                        corrections.append("TP Short manquant")
-                        # TODO: Replacer le TP Short
-
-                    # Vérifier que les ordres existent vraiment sur l'exchange
-                    if position.orders.get('tp_long'):
-                        # Vérifier que l'ordre existe toujours
-                        pass  # TODO: fetch_order et vérifier
-
-                    if corrections:
-                        self.auto_recovery_count += 1
-                        logger.info(f"Auto-recovery effectuée: {corrections}")
-
-                except Exception as e:
-                    logger.error(f"Erreur auto-recovery {pair}: {e}")
-
-            logger.info("=== AUTO-RECOVERY: Terminé ===")
-
-        except Exception as e:
-            logger.error(f"Erreur générale auto-recovery: {e}")
-
     def perform_health_check(self):
         """
         Vérification automatique de la santé du bot
@@ -2044,9 +1880,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         long_data = real_pos.get('long')
                         short_data = real_pos.get('short')
 
-                        # NOTE: Déséquilibre Long/Short est NORMAL dans la martingale
-                        # Le Long reste à Fib 0 (petit), le Short grossit avec les doublements
-                        # Pas besoin d'alerte pour ça
+                        # Vérifier si hedge équilibré
+                        if long_data and short_data:
+                            long_size = long_data['size']
+                            short_size = short_data['size']
+
+                            # Tolérance de 1% de différence
+                            if abs(long_size - short_size) / max(long_size, short_size) > 0.01:
+                                warnings.append(f"⚠️ {pair.split('/')[0]}: Hedge déséquilibré (L:{long_size:.2f} S:{short_size:.2f})")
+                                logger.warning(f"Hedge déséquilibré sur {pair}")
 
                         # Vérifier P&L extrême
                         if long_data and abs(long_data.get('unrealized_pnl', 0)) > 50:
@@ -2068,69 +1910,100 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 except:
                     pass
 
-            # 4. CONSTRUIRE RAPPORT (SEULEMENT SI TOUT VA BIEN OU PROBLÈMES CRITIQUES)
+            # 4. CONSTRUIRE RAPPORT DÉTAILLÉ AVEC VRAIES DONNÉES API
             if issues:
-                # Problèmes critiques - LOGGER mais PAS de Telegram (pour ne pas bloquer)
-                logger.error(f"Health check: {len(issues)} ISSUES CRITIQUES - {issues}")
-                # Ne pas envoyer sur Telegram pour ne pas bloquer le bot
-                # Le bot continue de tourner même avec des erreurs
+                # Problèmes critiques détectés
+                message = f"""
+🚨 <b>ALERTE - Problèmes détectés</b>
+
+{chr(10).join(issues[:5])}
+
+Erreurs totales: {self.error_count}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                logger.warning(f"Health check: {len(issues)} issues")
 
             elif warnings:
-                # Avertissements - JUSTE LOGGER, NE PAS ENVOYER SUR TELEGRAM (pour ne pas bloquer)
-                logger.warning(f"Health check: {len(warnings)} warnings - {warnings}")
-                # PAS de message Telegram pour warnings (ça bloque le bot)
+                # Avertissements - afficher les vraies données
+                message = f"""
+⚠️ <b>Health Check: Avertissements</b>
+
+{chr(10).join(warnings[:5])}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+                logger.info(f"Health check: {len(warnings)} warnings")
 
             else:
-                # Tout va bien - Envoyer rapport SEULEMENT toutes les 5 minutes (pour ne pas spam)
-                # Entre temps, juste logger
+                # Tout va bien - RAPPORT DÉTAILLÉ AVEC VRAIES DONNÉES API
+                message_parts = ["✅ <b>SYSTÈME OK</b>\n"]
 
-                minutes_since_startup = (time.time() - self.startup_time) / 60
-                should_send_telegram = int(minutes_since_startup) % 5 == 0 and (time.time() - self.last_health_check) < 5
+                # Parcourir chaque paire active et afficher VRAIES données
+                for pair in self.volatile_pairs:
+                    try:
+                        real_pos = self.get_real_positions(pair)
+                        if not real_pos:
+                            continue
 
-                if should_send_telegram or self.error_count > 0:
-                    # RAPPORT DÉTAILLÉ AVEC VRAIES DONNÉES API
-                    message_parts = ["✅ <b>SYSTÈME OK</b>\n"]
+                        long_data = real_pos.get('long')
+                        short_data = real_pos.get('short')
 
-                    # Parcourir chaque paire active
-                    for pair in self.volatile_pairs:
-                        try:
-                            real_pos = self.get_real_positions(pair)
-                            if not real_pos:
-                                continue
+                        # Si au moins une position existe sur cette paire
+                        if long_data or short_data:
+                            pair_name = pair.split('/')[0]
+                            current_price = self.get_price(pair)
 
-                            long_data = real_pos.get('long')
-                            short_data = real_pos.get('short')
+                            message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
+                            message_parts.append(f"💰 Prix: ${current_price:.5f}\n")
 
-                            if long_data or short_data:
-                                pair_name = pair.split('/')[0]
-                                current_price = self.get_price(pair)
+                            # LONG (si ouvert) - EN VERT
+                            if long_data:
+                                contracts = long_data['size']
+                                entry = long_data['entry_price']
+                                margin = long_data['margin']
+                                pnl = long_data['unrealized_pnl']
+                                roe = long_data['pnl_percentage']
 
-                                message_parts.append(f"\n━━━━ <b>{pair_name}</b> ━━━━")
-                                message_parts.append(f"💰 ${current_price:.5f}\n")
+                                message_parts.append(f"🟢 <b>LONG</b>")
+                                message_parts.append(f"🟢 Contrats: {contracts:.0f}")
+                                message_parts.append(f"🟢 Entrée: ${entry:.5f}")
+                                message_parts.append(f"🟢 Marge: {margin:.4f} USDT")
+                                message_parts.append(f"🟢 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🟢 ROE: {roe:+.2f}%\n")
 
-                                # LONG - VERT
-                                if long_data:
-                                    message_parts.append(f"🟢 <b>L</b> {long_data['size']:.0f} @ ${long_data['entry_price']:.5f}")
-                                    message_parts.append(f"🟢 {long_data['unrealized_pnl']:+.4f} USDT ({long_data['pnl_percentage']:+.2f}%)\n")
+                            # SHORT (si ouvert) - EN ROUGE
+                            if short_data:
+                                contracts = short_data['size']
+                                entry = short_data['entry_price']
+                                margin = short_data['margin']
+                                pnl = short_data['unrealized_pnl']
+                                roe = short_data['pnl_percentage']
+                                liq_price = short_data.get('liquidation_price', 0)
 
-                                # SHORT - ROUGE
-                                if short_data:
-                                    message_parts.append(f"🔴 <b>S</b> {short_data['size']:.0f} @ ${short_data['entry_price']:.5f}")
-                                    message_parts.append(f"🔴 {short_data['unrealized_pnl']:+.4f} USDT ({short_data['pnl_percentage']:+.2f}%)")
+                                message_parts.append(f"🔴 <b>SHORT</b>")
+                                message_parts.append(f"🔴 Contrats: {contracts:.0f}")
+                                message_parts.append(f"🔴 Entrée: ${entry:.5f}")
+                                message_parts.append(f"🔴 Marge: {margin:.4f} USDT")
+                                message_parts.append(f"🔴 P&L: {pnl:+.4f} USDT")
+                                message_parts.append(f"🔴 ROE: {roe:+.2f}%")
+                                if liq_price > 0:
+                                    message_parts.append(f"🔴 💀 Liq: ${liq_price:.5f}")
 
-                        except Exception as e:
-                            logger.error(f"Erreur affichage {pair}: {e}")
+                    except Exception as e:
+                        logger.error(f"Erreur affichage {pair}: {e}")
 
-                    # Footer compact
-                    message_parts.append(f"\n━━━━━━━━━━━━━━")
-                    message_parts.append(f"📝 {total_orders} ordres | 🔧 API OK")
-                    message_parts.append(f"⏰ {datetime.now().strftime('%H:%M')}")
+                # Footer avec résumé
+                message_parts.append(f"\n━━━━━━━━━━━━━━")
+                message_parts.append(f"📝 Ordres: {total_orders}")
+                message_parts.append(f"🔧 API: OK")
+                message_parts.append(f"🐛 Erreurs: {self.error_count}")
+                message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
 
-                    self.send_telegram("\n".join(message_parts))
-                    logger.info("Health check: Report sent")
-                else:
-                    # Juste logger sans envoyer Telegram
-                    logger.info(f"Health check: OK (positions: {len([p for p in self.volatile_pairs if self.get_real_positions(p)])}, orders: {total_orders})")
+                self.send_telegram("\n".join(message_parts))
+                logger.info("Health check: All OK - Detailed report sent")
 
                 # Réinitialiser le compteur d'erreurs si tout va bien
                 if self.error_count > 0:
@@ -2364,9 +2237,6 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # Vérifier commandes Telegram (toutes les 2 secondes)
                 if iteration % 2 == 0:
                     self.check_telegram_commands()
-
-                # AUTO-RECOVERY: Vérifier et corriger ordres manquants (toutes les 30s)
-                self.auto_recovery_orders()
 
                 # VÉRIFICATION AUTOMATIQUE DE SANTÉ (toutes les 60 secondes)
                 self.perform_health_check()
