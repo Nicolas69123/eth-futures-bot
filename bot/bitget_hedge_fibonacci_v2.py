@@ -14,6 +14,8 @@ import hmac
 import base64
 import hashlib
 import json
+import subprocess
+import sys
 
 # Charger .env
 env_path = Path(__file__).parent.parent / '.env'
@@ -259,13 +261,170 @@ Balance disponible: ${balance:.0f}€
             message = """
 🤖 <b>COMMANDES DISPONIBLES</b>
 
+📊 <b>Trading:</b>
 /pnl - P&L total de la session
 /positions - Positions ouvertes
 /history - Historique des 10 derniers trades
 /balance - Balance et capital disponible
+
+🔧 <b>Contrôle:</b>
+/status - État du système
+/admin - Commandes administrateur
+
 /help - Liste des commandes
 """
             self.send_telegram(message)
+
+        elif command == '/admin':
+            message = """
+🔐 <b>COMMANDES ADMIN</b>
+
+🔄 /update - Mettre à jour depuis GitHub et redémarrer
+♻️ /restart - Redémarrer le bot
+⏹️ /stop - Arrêter le bot (nécessite confirmation)
+📊 /status - État système détaillé
+
+⚠️ <b>Attention:</b> Ces commandes affectent le bot!
+"""
+            self.send_telegram(message)
+
+        elif command == '/status':
+            # Status système détaillé
+            try:
+                # Uptime du système
+                uptime_result = subprocess.run(['uptime'], capture_output=True, text=True)
+                uptime = uptime_result.stdout.strip() if uptime_result.returncode == 0 else "N/A"
+
+                # Mémoire disponible
+                mem_result = subprocess.run(['free', '-h'], capture_output=True, text=True)
+                mem_lines = mem_result.stdout.split('\n') if mem_result.returncode == 0 else []
+                mem_info = mem_lines[1] if len(mem_lines) > 1 else "N/A"
+
+                # Git status
+                git_result = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'],
+                                          capture_output=True, text=True, cwd=Path(__file__).parent.parent)
+                git_hash = git_result.stdout.strip() if git_result.returncode == 0 else "N/A"
+
+                message = f"""
+📊 <b>STATUS SYSTÈME</b>
+
+🖥️ <b>Serveur:</b>
+{uptime}
+
+💾 <b>Mémoire:</b>
+{mem_info}
+
+📦 <b>Version:</b>
+Git commit: {git_hash}
+
+🤖 <b>Bot:</b>
+Positions actives: {len(self.active_positions)}
+Capital utilisé: ${self.capital_used:.0f}€
+Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}
+"""
+                self.send_telegram(message)
+            except Exception as e:
+                self.send_telegram(f"⚠️ Erreur status: {e}")
+
+        elif command == '/update':
+            self.send_telegram("🔄 <b>MISE À JOUR EN COURS...</b>\n\n⏳ Récupération depuis GitHub...")
+
+            try:
+                # Git pull
+                git_pull = subprocess.run(['git', 'pull'],
+                                        capture_output=True, text=True,
+                                        cwd=Path(__file__).parent.parent)
+
+                if git_pull.returncode == 0:
+                    output = git_pull.stdout.strip()
+
+                    if "Already up to date" in output:
+                        self.send_telegram("✅ Déjà à jour!\n\n🔄 Redémarrage du bot...")
+                    else:
+                        self.send_telegram(f"✅ Mise à jour réussie!\n\n📦 Changements:\n{output[:200]}...\n\n🔄 Redémarrage...")
+
+                    time.sleep(2)
+
+                    # Créer script de redémarrage
+                    restart_script = """#!/bin/bash
+cd ~/eth-futures-bot
+screen -X -S trading quit
+sleep 2
+screen -dmS trading python3 bot/bitget_hedge_fibonacci_v2.py
+"""
+
+                    # Écrire et exécuter le script
+                    script_path = Path('/tmp/restart_bot.sh')
+                    script_path.write_text(restart_script)
+                    script_path.chmod(0o755)
+
+                    # Lancer le redémarrage en arrière-plan
+                    subprocess.Popen(['bash', str(script_path)])
+
+                    self.send_telegram("🚀 Bot redémarré avec la nouvelle version!")
+                    time.sleep(1)
+                    sys.exit(0)  # Arrêter cette instance
+
+                else:
+                    self.send_telegram(f"❌ Erreur git pull:\n{git_pull.stderr}")
+
+            except Exception as e:
+                self.send_telegram(f"❌ Erreur mise à jour: {e}")
+
+        elif command == '/restart':
+            self.send_telegram("♻️ <b>REDÉMARRAGE DU BOT...</b>")
+            time.sleep(1)
+
+            try:
+                # Script de redémarrage
+                restart_script = """#!/bin/bash
+cd ~/eth-futures-bot
+screen -X -S trading quit
+sleep 2
+screen -dmS trading python3 bot/bitget_hedge_fibonacci_v2.py
+"""
+
+                script_path = Path('/tmp/restart_bot.sh')
+                script_path.write_text(restart_script)
+                script_path.chmod(0o755)
+
+                subprocess.Popen(['bash', str(script_path)])
+
+                self.send_telegram("✅ Bot redémarré!")
+                time.sleep(1)
+                sys.exit(0)
+
+            except Exception as e:
+                self.send_telegram(f"❌ Erreur redémarrage: {e}")
+
+        elif command.startswith('/stop'):
+            # Demander confirmation
+            if command == '/stop':
+                message = """
+⚠️ <b>CONFIRMATION REQUISE</b>
+
+Êtes-vous sûr de vouloir arrêter le bot?
+
+Pour confirmer, envoyez:
+/stop CONFIRM
+
+Le bot sera complètement arrêté et devra être relancé manuellement.
+"""
+                self.send_telegram(message)
+
+            elif command == '/stop CONFIRM':
+                self.send_telegram("⏹️ <b>ARRÊT DU BOT...</b>\n\nFermeture des positions et ordres...")
+
+                # Nettoyer avant d'arrêter
+                self.cleanup_all_positions_and_orders()
+
+                self.send_telegram("🛑 Bot arrêté.\n\nPour redémarrer:\n- Via Telegram: /restart ou /update\n- Via Terminal: screen -S trading")
+
+                time.sleep(2)
+                subprocess.run(['screen', '-X', '-S', 'trading', 'quit'])
+                sys.exit(0)
 
     def check_telegram_commands(self):
         """Vérifie et traite les commandes Telegram"""
@@ -1329,27 +1488,31 @@ Bitget API: {'✅' if self.api_key else '❌'}
 
             # Message démarrage
             startup = f"""
-🤖 <b>BOT HEDGE V2 DÉMARRÉ</b>
+🤖 <b>CRYPTO HEDGE BOT V2 DÉMARRÉ</b>
 
 💰 Capital: ${self.MAX_CAPITAL}€
 ⚡ Levier: x{self.LEVERAGE}
 📊 Marge initiale: ${self.INITIAL_MARGIN}€
 
-📝 <b>Système ordres limites:</b>
-✅ TP + Doublement automatique
-✅ Annulation intelligente
-✅ Fibonacci: 1%, 2%, 4%, 7%, 12%...
+📝 <b>Système:</b>
+✅ Hedge automatique avec TP/SL
+✅ Grille Fibonacci adaptive
+✅ Nettoyage auto au démarrage
 
-Paires: {', '.join([p.split('/')[0] for p in self.volatile_pairs])}
+🪙 Paires: {', '.join([p.split('/')[0] for p in self.volatile_pairs])}
 
-📲 <b>Commandes disponibles:</b>
-/pnl - P&L total
-/positions - Positions ouvertes
-/balance - Balance disponible
-/history - Historique trades
-/help - Aide commandes
+📲 <b>Commandes principales:</b>
+/pnl - P&L et performance
+/positions - Positions actives
+/status - État du système
+/admin - Commandes admin
+/help - Toutes les commandes
 
-📊 Status auto: Toutes les 1 min
+🔄 <b>Contrôle à distance activé!</b>
+Utilisez /admin pour voir les commandes de contrôle
+
+📊 Rapport auto: Toutes les 60 secondes
+🌐 Serveur: Oracle Cloud (Marseille)
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
