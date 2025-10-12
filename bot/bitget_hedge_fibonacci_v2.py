@@ -364,6 +364,7 @@ Balance disponible: ${balance:.0f}€
 🔄 /update - Mettre à jour depuis GitHub et redémarrer
 ♻️ /restart - Redémarrer le bot
 🧹 /cleanup - Fermer TOUTES les positions et ordres
+🔨 /forceclose - Force close (essaie 4 méthodes)
 🔍 /checkapi - Vérifier positions réelles sur Bitget API
 📜 /logs - Voir les derniers logs du bot
 🐛 /debugrestart - Voir le log du dernier redémarrage
@@ -479,6 +480,57 @@ Balance disponible: ${balance:.0f}€
 
             except Exception as e:
                 self.send_telegram(f"❌ Erreur vérification API: {e}")
+
+        elif command == '/forceclose':
+            # FERMETURE FORCÉE avec toutes les méthodes possibles
+            self.send_telegram("🔨 <b>FORCE CLOSE - Essai toutes méthodes</b>\n\nFermeture agressive de toutes positions...")
+            logger.info("Commande /forceclose - Fermeture agressive")
+
+            try:
+                closed_positions = []
+                failed_positions = []
+
+                for pair in self.volatile_pairs:
+                    real_pos = self.get_real_positions(pair)
+                    if not real_pos:
+                        continue
+
+                    # Fermer Long si existe
+                    if real_pos.get('long'):
+                        success = self.force_close_position(pair, 'long', real_pos['long']['size'])
+                        if success:
+                            closed_positions.append(f"✅ LONG {pair.split('/')[0]}")
+                        else:
+                            failed_positions.append(f"❌ LONG {pair.split('/')[0]}")
+
+                    # Fermer Short si existe
+                    if real_pos.get('short'):
+                        success = self.force_close_position(pair, 'short', real_pos['short']['size'])
+                        if success:
+                            closed_positions.append(f"✅ SHORT {pair.split('/')[0]}")
+                        else:
+                            failed_positions.append(f"❌ SHORT {pair.split('/')[0]}")
+
+                # Rapport
+                report = ["🔨 <b>FORCE CLOSE TERMINÉ</b>\n"]
+
+                if closed_positions:
+                    report.append("\n<b>Fermées:</b>")
+                    report.extend(closed_positions)
+
+                if failed_positions:
+                    report.append("\n<b>Échecs:</b>")
+                    report.extend(failed_positions)
+                    report.append("\n⚠️ Fermez manuellement sur Bitget")
+
+                if not closed_positions and not failed_positions:
+                    report.append("✅ Aucune position à fermer")
+
+                report.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                self.send_telegram("\n".join(report))
+
+            except Exception as e:
+                self.send_telegram(f"❌ Erreur forceclose: {e}")
 
         elif command == '/logs':
             try:
@@ -1022,6 +1074,113 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         except Exception as e:
             print(f"⚠️ Erreur annulation TP/SL: {e}")
             return False
+
+    def force_close_position(self, pair, side, size):
+        """
+        Ferme une position en essayant TOUTES les méthodes possibles
+
+        Args:
+            pair: Paire (ex: 'DOGE/USDT:USDT')
+            side: 'long' ou 'short'
+            size: Taille de la position
+
+        Returns:
+            bool: True si fermé, False sinon
+        """
+        logger.info(f"🔨 Force close {side} {pair} - {size} contrats")
+
+        # Side opposé pour fermer
+        close_side = 'sell' if side == 'long' else 'buy'
+
+        # MÉTHODE 1: Avec holdSide seulement (SANS tradeSide)
+        try:
+            logger.info(f"Méthode 1: holdSide={side}, NO tradeSide")
+            close_order = self.exchange.create_order(
+                symbol=pair,
+                type='market',
+                side=close_side,
+                amount=size,
+                params={'holdSide': side}
+            )
+            logger.info(f"✅ MÉTHODE 1 RÉUSSIE: {close_order.get('id')}")
+            time.sleep(2)
+
+            # Vérifier
+            verify_pos = self.get_real_positions(pair)
+            if verify_pos and verify_pos.get(side) and verify_pos[side]['size'] < size * 0.1:
+                logger.info(f"✅ Position {side} fermée (Méthode 1)")
+                return True
+
+        except Exception as e:
+            logger.warning(f"Méthode 1 échouée: {e}")
+
+        # MÉTHODE 2: reduceOnly=True
+        try:
+            logger.info(f"Méthode 2: reduceOnly=True")
+            close_order = self.exchange.create_order(
+                symbol=pair,
+                type='market',
+                side=close_side,
+                amount=size,
+                params={'reduceOnly': True}
+            )
+            logger.info(f"✅ MÉTHODE 2 RÉUSSIE: {close_order.get('id')}")
+            time.sleep(2)
+
+            # Vérifier
+            verify_pos = self.get_real_positions(pair)
+            if not verify_pos or not verify_pos.get(side):
+                logger.info(f"✅ Position {side} fermée (Méthode 2)")
+                return True
+
+        except Exception as e:
+            logger.warning(f"Méthode 2 échouée: {e}")
+
+        # MÉTHODE 3: Ordre market simple (sans params du tout)
+        try:
+            logger.info(f"Méthode 3: Ordre market simple")
+            close_order = self.exchange.create_order(
+                symbol=pair,
+                type='market',
+                side=close_side,
+                amount=size
+            )
+            logger.info(f"✅ MÉTHODE 3 RÉUSSIE: {close_order.get('id')}")
+            time.sleep(2)
+
+            # Vérifier
+            verify_pos = self.get_real_positions(pair)
+            if not verify_pos or not verify_pos.get(side):
+                logger.info(f"✅ Position {side} fermée (Méthode 3)")
+                return True
+
+        except Exception as e:
+            logger.warning(f"Méthode 3 échouée: {e}")
+
+        # MÉTHODE 4: posSide pour API v2 Bitget
+        try:
+            logger.info(f"Méthode 4: posSide")
+            close_order = self.exchange.create_order(
+                symbol=pair,
+                type='market',
+                side=close_side,
+                amount=size,
+                params={'posSide': side}
+            )
+            logger.info(f"✅ MÉTHODE 4 RÉUSSIE: {close_order.get('id')}")
+            time.sleep(2)
+
+            # Vérifier
+            verify_pos = self.get_real_positions(pair)
+            if not verify_pos or not verify_pos.get(side):
+                logger.info(f"✅ Position {side} fermée (Méthode 4)")
+                return True
+
+        except Exception as e:
+            logger.warning(f"Méthode 4 échouée: {e}")
+
+        logger.error(f"❌ TOUTES LES MÉTHODES ONT ÉCHOUÉ pour {side} {pair}")
+        return False
 
     def open_hedge_with_limit_orders(self, pair):
         """
@@ -1704,7 +1863,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         cleanup_report = []
 
         try:
-            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC VÉRIFICATION)
+            # 1. FERMER TOUTES LES POSITIONS OUVERTES (AVEC FORCE_CLOSE_POSITION)
             for pair in self.volatile_pairs:
                 try:
                     positions = self.exchange.fetch_positions(symbols=[pair])
@@ -1714,69 +1873,18 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             side = pos.get('side', '').lower()
                             symbol = pos['symbol']
 
-                            logger.info(f"Fermeture position {side} sur {symbol}: {size} contrats")
+                            logger.info(f"Nettoyage: Fermeture position {side} sur {symbol}: {size} contrats")
                             print(f"   🔴 Fermeture position {side} sur {symbol}: {size} contrats")
 
-                            # Fermer la position avec un ordre market opposé - SYNTAXE CORRECTE BITGET
-                            if side == 'long':
-                                logger.info(f"Tentative fermeture LONG: {symbol}, side=sell, amount={size}, holdSide=long")
-                                close_order = self.exchange.create_order(
-                                    symbol=symbol,
-                                    type='market',
-                                    side='sell',
-                                    amount=size,
-                                    params={'tradeSide': 'close', 'holdSide': 'long'}
-                                )
-                                logger.info(f"Ordre fermeture LONG exécuté: {close_order.get('id', 'N/A')}")
-                                cleanup_report.append(f"❌ Fermé LONG {symbol.split('/')[0]} ({size:.2f})")
-                            elif side == 'short':
-                                logger.info(f"Tentative fermeture SHORT: {symbol}, side=buy, amount={size}, holdSide=short")
-                                close_order = self.exchange.create_order(
-                                    symbol=symbol,
-                                    type='market',
-                                    side='buy',
-                                    amount=size,
-                                    params={'tradeSide': 'close', 'holdSide': 'short'}
-                                )
-                                logger.info(f"Ordre fermeture SHORT exécuté: {close_order.get('id', 'N/A')}")
-                                cleanup_report.append(f"❌ Fermé SHORT {symbol.split('/')[0]} ({size:.2f})")
+                            # Utiliser force_close_position (essaie 4 méthodes)
+                            success = self.force_close_position(symbol, side, size)
 
-                            time.sleep(2)  # Attendre exécution complète
-
-                            # VÉRIFIER que la position est bien fermée à 100%
-                            max_retries = 3
-                            for retry in range(max_retries):
-                                time.sleep(1)
-                                verify_pos = self.exchange.fetch_positions(symbols=[pair])
-
-                                position_found = False
-                                for vpos in verify_pos:
-                                    if vpos.get('side', '').lower() == side:
-                                        remaining = float(vpos.get('contracts', 0))
-                                        if remaining > 0:
-                                            position_found = True
-                                            logger.warning(f"⚠️ Position {side} pas complètement fermée: {remaining} reste (tentative {retry+1}/{max_retries})")
-                                            print(f"   ⚠️ RESTE {remaining} contrats {side} - Nouvelle tentative...")
-
-                                            # Tenter de fermer à nouveau avec holdSide
-                                            try:
-                                                self.exchange.create_order(
-                                                    symbol=symbol,
-                                                    type='market',
-                                                    side='sell' if side == 'long' else 'buy',
-                                                    amount=remaining,
-                                                    params={'tradeSide': 'close', 'holdSide': side}
-                                                )
-                                                logger.info(f"✅ Fermeture complète position {side} (tentative {retry+1})")
-                                                time.sleep(2)
-                                            except Exception as retry_error:
-                                                logger.error(f"Erreur lors de la fermeture retry: {retry_error}")
-                                                break
-
-                                if not position_found:
-                                    logger.info(f"✅ Position {side} complètement fermée")
-                                    print(f"   ✅ Position {side} 100% fermée")
-                                    break
+                            if success:
+                                cleanup_report.append(f"❌ Fermé {side.upper()} {symbol.split('/')[0]} ({size:.0f})")
+                                logger.info(f"✅ Position {side} fermée avec succès")
+                            else:
+                                cleanup_report.append(f"⚠️ Échec fermeture {side.upper()} {symbol.split('/')[0]}")
+                                logger.error(f"❌ Impossible de fermer {side} {symbol}")
 
                 except Exception as e:
                     error_msg = f"Erreur fermeture positions {pair}: {e}"
