@@ -543,139 +543,59 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
 
         elif command == '/update':
             logger.info("Commande /update reçue")
-            self.send_telegram("🔄 <b>MISE À JOUR EN COURS...</b>\n\n⏳ Récupération depuis GitHub...")
+            self.send_telegram("🔄 <b>MISE À JOUR...</b>\n\n⚠️ Le bot va redémarrer.\n\nPatientez 20 secondes.")
 
             try:
-                # Git pull
-                git_pull = subprocess.run(['git', 'pull'],
-                                        capture_output=True, text=True,
-                                        cwd=Path(__file__).parent.parent,
-                                        timeout=30)
+                # Utiliser le script manage_local.sh
+                manage_script = Path(__file__).parent.parent / 'manage_local.sh'
 
-                if git_pull.returncode == 0:
-                    output = git_pull.stdout.strip()
-                    logger.info(f"Git pull output: {output}")
+                if not manage_script.exists():
+                    self.send_telegram("❌ Script manage_local.sh introuvable!\n\nUtilisez le raccourci Bureau à la place.")
+                    logger.error("manage_local.sh not found")
+                    return
 
-                    if "Already up to date" in output:
-                        self.send_telegram("✅ Déjà à jour!\n\n🔄 Redémarrage du bot...")
-                    else:
-                        self.send_telegram(f"✅ Mise à jour réussie!\n\n📦 Changements:\n{output[:200]}...\n\n🔄 Redémarrage...")
+                # Lancer le script en arrière-plan
+                logger.info("Lancement manage_local.sh update")
+                subprocess.Popen(['bash', str(manage_script), 'update'],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL,
+                               start_new_session=True)
 
-                    time.sleep(1)
-
-                    # Créer script de redémarrage ROBUSTE
-                    restart_script = """#!/bin/bash
-set -e  # Arrêter si erreur
-
-# Log du script
-exec > /tmp/bot_restart.log 2>&1
-echo "=== DÉBUT REDÉMARRAGE $(date) ==="
-
-cd ~/eth-futures-bot
-
-# Arrêter l'ancienne instance
-echo "Arrêt de l'instance actuelle..."
-screen -X -S trading quit 2>/dev/null || echo "Aucune session à arrêter"
-
-# Attendre que le processus soit bien terminé
-sleep 3
-
-# Vérifier que le dossier existe
-if [ ! -f "./start_bot.sh" ]; then
-    echo "ERREUR: start_bot.sh introuvable!"
-    exit 1
-fi
-
-# Démarrer en screen avec output logging
-echo "Démarrage nouvelle instance..."
-screen -dmS trading bash -c 'cd ~/eth-futures-bot && ./start_bot.sh; exec bash'
-
-# Vérifier que screen a bien démarré
-sleep 2
-if screen -list | grep -q "trading"; then
-    echo "✅ Bot redémarré avec succès - $(date)"
-else
-    echo "❌ Échec du redémarrage - $(date)"
-    exit 1
-fi
-
-echo "=== FIN REDÉMARRAGE $(date) ==="
-"""
-
-                    # Écrire et exécuter le script
-                    script_path = Path('/tmp/restart_bot.sh')
-                    script_path.write_text(restart_script)
-                    script_path.chmod(0o755)
-
-                    logger.info("Lancement du script de redémarrage")
-                    self.send_telegram("🚀 Redémarrage en cours...\n\n⏳ Patientez 10-15 secondes.\n\nVous recevrez le message de démarrage du bot.")
-
-                    # Lancer le redémarrage en arrière-plan
-                    subprocess.Popen(['bash', str(script_path)])
-
-                    time.sleep(1)
-                    sys.exit(0)  # Arrêter cette instance
-
-                else:
-                    error_msg = f"❌ Erreur git pull:\n{git_pull.stderr}"
-                    logger.error(error_msg)
-                    self.send_telegram(error_msg)
+                logger.info("Script lancé, arrêt de cette instance")
+                time.sleep(0.5)
+                sys.exit(0)  # Arrêter cette instance
 
             except Exception as e:
-                error_msg = f"❌ Erreur mise à jour: {e}"
+                error_msg = f"❌ Erreur /update: {e}"
                 logger.error(error_msg)
                 self.send_telegram(error_msg)
 
         elif command == '/restart':
             logger.info("Commande /restart reçue")
-            self.send_telegram("♻️ <b>REDÉMARRAGE DU BOT...</b>")
-            time.sleep(1)
+            self.send_telegram("♻️ <b>REDÉMARRAGE...</b>\n\n⚠️ Le bot va redémarrer.\n\nPatientez 20 secondes.")
 
             try:
-                # Script de redémarrage ROBUSTE
-                restart_script = """#!/bin/bash
-set -e
+                # Utiliser le script manage_local.sh
+                manage_script = Path(__file__).parent.parent / 'manage_local.sh'
 
-exec > /tmp/bot_restart.log 2>&1
-echo "=== DÉBUT REDÉMARRAGE $(date) ==="
+                if not manage_script.exists():
+                    self.send_telegram("❌ Script manage_local.sh introuvable!\n\nUtilisez le raccourci Bureau.")
+                    logger.error("manage_local.sh not found")
+                    return
 
-cd ~/eth-futures-bot
-screen -X -S trading quit 2>/dev/null || echo "Aucune session à arrêter"
-sleep 3
+                # Lancer le script en arrière-plan
+                logger.info("Lancement manage_local.sh restart")
+                subprocess.Popen(['bash', str(manage_script), 'restart'],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL,
+                               start_new_session=True)
 
-if [ ! -f "./start_bot.sh" ]; then
-    echo "ERREUR: start_bot.sh introuvable!"
-    exit 1
-fi
-
-echo "Démarrage nouvelle instance..."
-screen -dmS trading bash -c 'cd ~/eth-futures-bot && ./start_bot.sh; exec bash'
-
-sleep 2
-if screen -list | grep -q "trading"; then
-    echo "✅ Bot redémarré - $(date)"
-else
-    echo "❌ Échec redémarrage - $(date)"
-    exit 1
-fi
-
-echo "=== FIN REDÉMARRAGE $(date) ==="
-"""
-
-                script_path = Path('/tmp/restart_bot.sh')
-                script_path.write_text(restart_script)
-                script_path.chmod(0o755)
-
-                logger.info("Lancement du script de redémarrage")
-                self.send_telegram("🚀 Redémarrage...\n\n⏳ Patientez 10-15 secondes.\n\nVous recevrez le message de démarrage.")
-
-                subprocess.Popen(['bash', str(script_path)])
-
-                time.sleep(1)
+                logger.info("Script lancé, arrêt de cette instance")
+                time.sleep(0.5)
                 sys.exit(0)
 
             except Exception as e:
-                error_msg = f"❌ Erreur redémarrage: {e}"
+                error_msg = f"❌ Erreur /restart: {e}"
                 logger.error(error_msg)
                 self.send_telegram(error_msg)
 
