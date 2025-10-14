@@ -1614,10 +1614,11 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 logger.info(f"SHORT: Fib {position.short_fib_level} ({size_short_total:.0f} contrats @ ${entry_short_moyen:.5f})")
 
-                # 1. TP SHORT au prochain niveau (ferme INTÉGRALITÉ)
-                tp_short_price = entry_short_moyen * (1 - next_short_pct / 100)
+                # 1. TP SHORT FIXE à 0.3% (ferme INTÉGRALITÉ)
+                TP_FIXE = 0.3
+                tp_short_price = entry_short_moyen * (1 - TP_FIXE / 100)
 
-                # 2. Double SHORT au MÊME niveau que TP
+                # 2. Double SHORT au niveau Fibonacci suivant
                 double_short_price = entry_short_moyen * (1 + next_short_pct / 100)
 
                 # Validation distance
@@ -1643,8 +1644,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     )
                     if tp_short_order and tp_short_order.get('id'):
                         position.orders['tp_short'] = tp_short_order['id']
-                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} ({size_short_total:.0f} contrats, -{next_short_pct}%)")
-                        print(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{next_short_pct}%, Fib {next_short_level})")
+                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} ({size_short_total:.0f} contrats, -{TP_FIXE}% FIXE)")
+                        print(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}% fixe)")
                 except Exception as e:
                     logger.error(f"Erreur TP Short: {e}")
                     print(f"❌ Erreur TP Short: {e}")
@@ -1746,10 +1747,11 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 logger.info(f"LONG: Fib {position.long_fib_level} ({size_long_total:.0f} contrats @ ${entry_long_moyen:.5f})")
 
-                # 1. TP LONG au prochain niveau (ferme INTÉGRALITÉ)
-                tp_long_price = entry_long_moyen * (1 + next_long_pct / 100)
+                # 1. TP LONG FIXE à 0.3% (ferme INTÉGRALITÉ)
+                TP_FIXE = 0.3
+                tp_long_price = entry_long_moyen * (1 + TP_FIXE / 100)
 
-                # 2. Double LONG au MÊME niveau que TP
+                # 2. Double LONG au niveau Fibonacci suivant
                 double_long_price = entry_long_moyen * (1 - next_long_pct / 100)
 
                 # Validation distance
@@ -1775,8 +1777,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     )
                     if tp_long_order and tp_long_order.get('id'):
                         position.orders['tp_long'] = tp_long_order['id']
-                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} ({size_long_total:.0f} contrats, +{next_long_pct}%)")
-                        print(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{next_long_pct}%, Fib {next_long_level})")
+                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} ({size_long_total:.0f} contrats, +{TP_FIXE}% FIXE)")
+                        print(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}% fixe)")
                 except Exception as e:
                     logger.error(f"Erreur TP Long: {e}")
                     print(f"❌ Erreur TP Long: {e}")
@@ -2084,10 +2086,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                             long_size = long_data['size']
                             short_size = short_data['size']
 
-                            # Tolérance de 1% de différence
-                            if abs(long_size - short_size) / max(long_size, short_size) > 0.01:
-                                warnings.append(f"⚠️ {pair.split('/')[0]}: Hedge déséquilibré (L:{long_size:.2f} S:{short_size:.2f})")
-                                logger.warning(f"Hedge déséquilibré sur {pair}")
+                            # Note: Déséquilibre NORMAL dans stratégie Fibonacci
+                            # Une position peut être à Fib 0 (250) et l'autre à Fib 3 (6750)
+                            # Pas d'alerte nécessaire
 
                         # Vérifier P&L extrême
                         if long_data and abs(long_data.get('unrealized_pnl', 0)) > 50:
