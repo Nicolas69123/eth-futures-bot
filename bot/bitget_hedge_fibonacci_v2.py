@@ -613,11 +613,6 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                     logger.error("manage_local.sh not found")
                     return
 
-                # Créer flag pour éviter cleanup au prochain démarrage
-                flag_file = Path('/tmp/bot_no_cleanup')
-                flag_file.write_text('update')
-                logger.info("Flag no-cleanup créé")
-
                 # Lancer le script en arrière-plan
                 logger.info("Lancement manage_local.sh update")
                 subprocess.Popen(['bash', str(manage_script), 'update'],
@@ -646,11 +641,6 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                     self.send_telegram("❌ Script manage_local.sh introuvable!\n\nUtilisez le raccourci Bureau.")
                     logger.error("manage_local.sh not found")
                     return
-
-                # Créer flag pour éviter cleanup au prochain démarrage
-                flag_file = Path('/tmp/bot_no_cleanup')
-                flag_file.write_text('restart')
-                logger.info("Flag no-cleanup créé")
 
                 # Lancer le script en arrière-plan
                 logger.info("Lancement manage_local.sh restart")
@@ -2768,18 +2758,23 @@ Erreurs totales: {self.error_count}
             print("\n📡 Connexion Bitget Testnet...")
             self.exchange.load_markets()
 
-            # Vérifier si c'est un restart/update (flag no-cleanup)
-            flag_file = Path('/tmp/bot_no_cleanup')
-            is_restart = flag_file.exists()
+            # Vérifier s'il y a des positions actives (restart/update) ou non (premier démarrage)
+            has_active_positions = False
+            try:
+                for pair in self.volatile_pairs:
+                    real_pos = self.get_real_positions(pair)
+                    if real_pos and (real_pos.get('long') or real_pos.get('short')):
+                        has_active_positions = True
+                        break
+            except:
+                pass
 
-            if is_restart:
-                reason = flag_file.read_text()
-                logger.info(f"Flag no-cleanup détecté ({reason}) - Conservation des positions")
-                print(f"🔄 Redémarrage ({reason}) - Positions conservées")
-                flag_file.unlink()  # Supprimer le flag
+            if has_active_positions:
+                logger.info("Positions actives détectées - Redémarrage (skip cleanup)")
+                print(f"🔄 Redémarrage - Positions conservées")
             else:
                 # NETTOYER TOUTES LES POSITIONS ET ORDRES EXISTANTS
-                logger.info("Démarrage initial - Nettoyage des positions")
+                logger.info("Aucune position active - Premier démarrage (cleanup)")
                 self.cleanup_all_positions_and_orders()
 
             # Message démarrage
@@ -2817,7 +2812,7 @@ Erreurs totales: {self.error_count}
             self.send_telegram(startup)
 
             # Ouvrir hedge UNIQUEMENT au premier démarrage (pas après restart/update)
-            if not is_restart:
+            if not has_active_positions:
                 logger.info(f"MODE TEST: Ouverture hedge sur DOGE uniquement")
                 print(f"\n📊 MODE TEST: Ouverture hedge sur DOGE uniquement...")
 
