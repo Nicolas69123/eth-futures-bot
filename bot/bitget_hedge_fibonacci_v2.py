@@ -626,7 +626,7 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                                start_new_session=True)
 
                 logger.info("Script lancé, arrêt de cette instance")
-                time.sleep(0.5)
+                
                 sys.exit(0)  # Arrêter cette instance
 
             except Exception as e:
@@ -660,7 +660,7 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                                start_new_session=True)
 
                 logger.info("Script lancé, arrêt de cette instance")
-                time.sleep(0.5)
+                
                 sys.exit(0)
 
             except Exception as e:
@@ -795,7 +795,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         """
         for attempt in range(max_retries):
             try:
-                time.sleep(0.5)  # Délai pour propagation
+                  # Délai pour propagation
                 order = self.exchange.fetch_order(order_id, symbol)
 
                 # Vérifier que l'ordre est bien ouvert ou rempli
@@ -1356,12 +1356,12 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if position.orders['tp_long']:
                 self.cancel_order(position.orders['tp_long'], pair)
                 position.orders['tp_long'] = None
-            time.sleep(0.5)
+            
 
             if position.orders['double_long']:
                 self.cancel_order(position.orders['double_long'], pair)
                 position.orders['double_long'] = None
-            time.sleep(0.5)
+            
 
             # Récupérer données Long depuis API
             long_data = real_pos.get('long')
@@ -1387,7 +1387,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             tp_long_price = entry_long_moyen * (1 + TP_FIXE / 100)
 
             try:
-                time.sleep(0.5)
+                
                 tp_order = self.place_tpsl_order(
                     symbol=pair,
                     plan_type='profit_plan',
@@ -1427,12 +1427,12 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if position.orders['tp_short']:
                 self.cancel_order(position.orders['tp_short'], pair)
                 position.orders['tp_short'] = None
-            time.sleep(0.5)
+            
 
             if position.orders['double_short']:
                 self.cancel_order(position.orders['double_short'], pair)
                 position.orders['double_short'] = None
-            time.sleep(0.5)
+            
 
             # Récupérer données Short depuis API
             short_data = real_pos.get('short')
@@ -1458,7 +1458,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             tp_short_price = entry_short_moyen * (1 - TP_FIXE / 100)
 
             try:
-                time.sleep(0.5)
+                
                 tp_order = self.place_tpsl_order(
                     symbol=pair,
                     plan_type='profit_plan',
@@ -1490,6 +1490,148 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             except Exception as e:
                 logger.error(f"Erreur Double Short: {e}")
 
+    def detect_fib_level_from_margin(self, margin):
+        """Détecte niveau Fibonacci depuis marge (1→3→9→27→81 USDT)"""
+        if margin < 2:
+            return 0
+        elif margin < 6:
+            return 1
+        elif margin < 18:
+            return 2
+        elif margin < 54:
+            return 3
+        elif margin < 162:
+            return 4
+        else:
+            return 5
+
+    def place_orders_for_long(self, pair, position, long_data):
+        """RATTRAPAGE: Place TP + Double pour Long"""
+        size_long = long_data['size']
+        entry_long = long_data['entry_price']
+
+        next_level = position.long_fib_level + 1
+        if next_level >= len(position.fib_levels):
+            return
+
+        next_pct = position.fib_levels[next_level]
+
+        # TP 0.3% fixe, Double niveau Fib
+        tp_price = entry_long * 1.003
+        double_price = entry_long * (1 - next_pct / 100)
+
+        # TP Long
+        if not position.orders['tp_long']:
+            try:
+                tp = self.place_tpsl_order(pair, 'profit_plan', tp_price, 'long', size_long)
+                if tp and tp.get('id'):
+                    position.orders['tp_long'] = tp['id']
+                    logger.info(f"🔧 RATTRAPAGE TP Long @ {self.format_price(tp_price, pair)}")
+            except Exception as e:
+                logger.error(f"Rattrapage TP Long: {e}")
+
+        # Double Long
+        if not position.orders['double_long']:
+            try:
+                double = self.exchange.create_order(
+                    pair, 'limit', 'buy', size_long * 2, double_price,
+                    params={'tradeSide': 'open', 'holdSide': 'long'}
+                )
+                if double and double.get('id'):
+                    position.orders['double_long'] = double['id']
+                    logger.info(f"🔧 RATTRAPAGE Double Long @ {self.format_price(double_price, pair)}")
+            except Exception as e:
+                logger.error(f"Rattrapage Double Long: {e}")
+
+    def place_orders_for_short(self, pair, position, short_data):
+        """RATTRAPAGE: Place TP + Double pour Short"""
+        size_short = short_data['size']
+        entry_short = short_data['entry_price']
+
+        next_level = position.short_fib_level + 1
+        if next_level >= len(position.fib_levels):
+            return
+
+        next_pct = position.fib_levels[next_level]
+
+        # TP 0.3% fixe, Double niveau Fib
+        tp_price = entry_short * 0.997
+        double_price = entry_short * (1 + next_pct / 100)
+
+        # TP Short
+        if not position.orders['tp_short']:
+            try:
+                tp = self.place_tpsl_order(pair, 'profit_plan', tp_price, 'short', size_short)
+                if tp and tp.get('id'):
+                    position.orders['tp_short'] = tp['id']
+                    logger.info(f"🔧 RATTRAPAGE TP Short @ {self.format_price(tp_price, pair)}")
+            except Exception as e:
+                logger.error(f"Rattrapage TP Short: {e}")
+
+        # Double Short
+        if not position.orders['double_short']:
+            try:
+                double = self.exchange.create_order(
+                    pair, 'limit', 'sell', size_short * 2, double_price,
+                    params={'tradeSide': 'open', 'holdSide': 'short'}
+                )
+                if double and double.get('id'):
+                    position.orders['double_short'] = double['id']
+                    logger.info(f"🔧 RATTRAPAGE Double Short @ {self.format_price(double_price, pair)}")
+            except Exception as e:
+                logger.error(f"Rattrapage Double Short: {e}")
+
+    def verify_and_fix_missing_orders(self, pair, position):
+        """
+        RATTRAPAGE COMPLET: Vérifie ordres manquants et les replace
+        Détecte niveau Fib depuis marge, replace ordres si manquants
+        """
+        try:
+            real_pos = self.get_real_positions(pair)
+            if not real_pos:
+                return
+
+            long_data = real_pos.get('long')
+            short_data = real_pos.get('short')
+
+            # Détecter + corriger niveaux Fib
+            if long_data:
+                detected = self.detect_fib_level_from_margin(long_data['margin'])
+                if detected != position.long_fib_level:
+                    logger.info(f"🔄 LONG Fib: {position.long_fib_level} → {detected}")
+                    position.long_fib_level = detected
+
+            if short_data:
+                detected = self.detect_fib_level_from_margin(short_data['margin'])
+                if detected != position.short_fib_level:
+                    logger.info(f"🔄 SHORT Fib: {position.short_fib_level} → {detected}")
+                    position.short_fib_level = detected
+
+            # Vérifier ordres manquants
+            missing = []
+            if long_data and not position.orders['tp_long']:
+                missing.append('tp_long')
+            if long_data and not position.orders['double_long']:
+                missing.append('double_long')
+            if short_data and not position.orders['tp_short']:
+                missing.append('tp_short')
+            if short_data and not position.orders['double_short']:
+                missing.append('double_short')
+
+            # Replacer si manquants
+            if missing:
+                logger.warning(f"⚠️ {pair}: {len(missing)} ordres manquants: {missing}")
+                print(f"🔧 RATTRAPAGE {pair}: {missing}")
+
+                if 'tp_long' in missing or 'double_long' in missing:
+                    self.place_orders_for_long(pair, position, long_data)
+
+                if 'tp_short' in missing or 'double_short' in missing:
+                    self.place_orders_for_short(pair, position, short_data)
+
+        except Exception as e:
+            logger.error(f"Erreur verify_and_fix: {e}")
+
     def check_orders_status(self, iteration=0):
         """Vérifie l'état des ordres (LIMIT + TP/SL plan)
 
@@ -1501,6 +1643,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
         for pair, position in list(self.active_positions.items()):
             try:
+                # RATTRAPAGE: Vérifier et replacer ordres manquants (toutes les 5s)
+                if iteration % 5 == 0:
+                    self.verify_and_fix_missing_orders(pair, position)
                 # INTERROGER API pour obtenir état actuel
                 real_pos = self.get_real_positions(pair)
                 if not real_pos:
@@ -1859,7 +2004,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # 3. Placer TP SHORT (INTÉGRALITÉ) - seulement si validation OK
                 if not skip_short_orders:
                     try:
-                        time.sleep(0.5)
+                        
                         tp_short_order = self.place_tpsl_order(
                             symbol=pair,
                             plan_type='profit_plan',
@@ -1914,7 +2059,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 # 3. Placer TP LONG
                 try:
-                    time.sleep(0.5)
+                    
                     tp_long_order = self.place_tpsl_order(
                         symbol=pair,
                         plan_type='profit_plan',
@@ -1986,7 +2131,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # 3. Placer TP LONG (INTÉGRALITÉ) - seulement si validation OK
                 if not skip_long_orders:
                     try:
-                        time.sleep(0.5)
+                        
                         tp_long_order = self.place_tpsl_order(
                             symbol=pair,
                             plan_type='profit_plan',
@@ -2041,7 +2186,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 # 3. Placer TP SHORT
                 try:
-                    time.sleep(0.5)
+                    
                     tp_short_order = self.place_tpsl_order(
                         symbol=pair,
                         plan_type='profit_plan',
