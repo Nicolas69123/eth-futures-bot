@@ -66,9 +66,12 @@ class HedgePosition:
         self.long_open = True
         self.short_open = True
 
-        # Grille Fibonacci (en % - 0.3% partout pour stabilité et test)
-        self.fib_levels = [0.3, 0.3, 0.6, 0.9, 1.5, 2.4, 3.9, 6.3, 10.2, 16.5]
-        self.current_level = 0
+        # Grille Fibonacci (en %) - Index 0 = Fib 0 (MARKET), 1 = Fib 1 (0.3%), etc.
+        self.fib_levels = [0, 0.3, 0.382, 0.5, 0.618, 1.0, 1.618, 2.618, 4.236, 6.854, 11.09]
+
+        # Niveaux Fibonacci SÉPARÉS pour Long et Short
+        self.long_fib_level = 0   # Long commence à Fib 0
+        self.short_fib_level = 0  # Short commence à Fib 0
 
         # IDs des ordres actifs
         self.orders = {
@@ -82,12 +85,19 @@ class HedgePosition:
         self.profit_realized = 0
         self.adjustments_count = 0
 
-    def get_next_trigger_pct(self):
-        """Retourne le prochain niveau Fibonacci en %"""
-        if self.current_level >= len(self.fib_levels):
+    def get_next_long_trigger_pct(self):
+        """Retourne le prochain niveau Fibonacci pour LONG (en %)"""
+        next_level = self.long_fib_level + 1
+        if next_level >= len(self.fib_levels):
             return None
+        return self.fib_levels[next_level]
 
-        return sum(self.fib_levels[:self.current_level + 1])
+    def get_next_short_trigger_pct(self):
+        """Retourne le prochain niveau Fibonacci pour SHORT (en %)"""
+        next_level = self.short_fib_level + 1
+        if next_level >= len(self.fib_levels):
+            return None
+        return self.fib_levels[next_level]
 
 
 class BitgetHedgeBotV2:
@@ -1172,10 +1182,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             # 2. Placer les 4 ordres limites avec vérification
             print("\n2️⃣ Placement des 4 ordres limites...")
 
-            next_trigger_pct = position.get_next_trigger_pct()
-            if not next_trigger_pct:
-                print("❌ Pas de niveau Fibonacci")
-                return False
+            # Niveau initial = Fib 1 (0.3%) pour TOUS les ordres
+            next_trigger_pct = position.fib_levels[1]  # Fib 1 = 0.3%
 
             # Récupérer le prix actuel du marché MAINTENANT
             current_market_price = self.get_price(pair)
@@ -1422,8 +1430,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         logger.error(f"❌ Erreur réouverture Long: {e}")
                         print(f"❌ Erreur réouverture Long: {e}")
 
-                    # Replacer ordres au niveau Fibonacci suivant
-                    position.current_level += 1
+                    # Ajuster niveaux Fibonacci: Long réinitialisé, Short incrémenté
+                    position.long_fib_level = 0   # Long réouvert au Fib 0
+                    position.short_fib_level += 1  # Short doublé, niveau suivant
                     self.place_next_level_orders(pair, position, direction='up')
 
                     # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
@@ -1437,7 +1446,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         # Short (doublé) - EN ROUGE
                         if final_pos.get('short'):
                             sd = final_pos['short']
-                            message_parts.append(f"🔴 <b>SHORT</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"🔴 <b>SHORT</b> (doublé - Fib {position.short_fib_level})")
                             message_parts.append(f"🔴 Contrats: {sd['size']:.0f}")
                             message_parts.append(f"🔴 Entrée: ${sd['entry_price']:.5f}")
                             message_parts.append(f"🔴 Marge: {sd['margin']:.7f} USDT")
@@ -1529,8 +1538,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         logger.error(f"❌ Erreur réouverture Short: {e}")
                         print(f"❌ Erreur réouverture Short: {e}")
 
-                    # Replacer ordres au niveau Fibonacci suivant
-                    position.current_level += 1
+                    # Ajuster niveaux Fibonacci: Short réinitialisé, Long incrémenté
+                    position.short_fib_level = 0  # Short réouvert au Fib 0
+                    position.long_fib_level += 1   # Long doublé, niveau suivant
                     self.place_next_level_orders(pair, position, direction='down')
 
                     # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
@@ -1544,7 +1554,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         # Long (doublé) - EN VERT
                         if final_pos.get('long'):
                             ld = final_pos['long']
-                            message_parts.append(f"🟢 <b>LONG</b> (doublé - Fib {position.current_level})")
+                            message_parts.append(f"🟢 <b>LONG</b> (doublé - Fib {position.long_fib_level})")
                             message_parts.append(f"🟢 Contrats: {ld['size']:.0f}")
                             message_parts.append(f"🟢 Entrée: ${ld['entry_price']:.5f}")
                             message_parts.append(f"🟢 Marge: {ld['margin']:.7f} USDT")
@@ -1571,256 +1581,284 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def place_next_level_orders(self, pair, position, direction):
         """
         Place les ordres pour le prochain niveau Fibonacci
-        NOUVELLE LOGIQUE: Place ordres pour BOTH côtés (hedge permanent)
+        Suit STRATEGY.md - Niveaux séparés Long/Short, TP = Double même niveau
+
+        direction='up': Prix a monté → Short doublé (Fib X+1), Long réouvert (Fib 0)
+        direction='down': Prix a descendu → Long doublé (Fib X+1), Short réouvert (Fib 0)
         """
 
-        next_trigger = position.get_next_trigger_pct()
-        if not next_trigger:
-            logger.info("✅ Fibonacci terminé pour cette paire")
-            print("✅ Fibonacci terminé pour cette paire")
-            return
-
+        # Récupérer positions réelles depuis API
         real_pos = self.get_real_positions(pair)
         if not real_pos:
             logger.warning(f"Impossible de récupérer positions pour {pair}")
             return
 
-        logger.info(f"Placement ordres niveau Fibonacci {position.current_level} (+{next_trigger}%)")
-        print(f"\n📝 Placement ordres niveau Fibonacci {position.current_level} (+{next_trigger}%)")
+        logger.info(f"[{pair}] Placement ordres - Long Fib{position.long_fib_level}, Short Fib{position.short_fib_level}")
+        print(f"\n📝 Placement ordres - Long Fib{position.long_fib_level}, Short Fib{position.short_fib_level}")
 
-        if direction == 'up':  # Prix a monté → SHORT doublé + NOUVEAU LONG réouvert
+        if direction == 'up':  # Prix a monté → SHORT doublé (Fib X+1) + LONG réouvert (Fib 0)
 
-            # ORDRES POUR LE SHORT (doublé)
+            # ===== ORDRES POUR LE SHORT (DOUBLÉ) =====
             short_data = real_pos.get('short')
             if short_data:
-                current_size_short = short_data['size']
-                current_entry_short = short_data['entry_price']
+                size_short_total = short_data['size']  # Taille TOTALE après doublement
+                entry_short_moyen = short_data['entry_price']  # Prix MOYEN après doublement
 
-                # 1. Calculer prix du prochain doublement Short
-                new_double_short_price = position.entry_price_short * (1 + next_trigger / 100)
+                # Prochain niveau pour Short
+                next_short_level = position.short_fib_level + 1
+                if next_short_level >= len(position.fib_levels):
+                    logger.info("✅ Fibonacci terminé pour SHORT")
+                    return
 
-                # 2. Calculer prix du TP Short (prix moyen après doublement -0.3%)
-                tp_short_price = self.calculate_breakeven_tp_price(position, real_pos, 'up')
-                if not tp_short_price:
-                    tp_short_price = current_entry_short * 0.997  # Fallback -0.3%
+                next_short_pct = position.fib_levels[next_short_level]
 
-                # 2b. Validation: Vérifier distance minimale TP SHORT
+                logger.info(f"SHORT: Fib {position.short_fib_level} ({size_short_total:.0f} contrats @ ${entry_short_moyen:.5f})")
+
+                # 1. TP SHORT au prochain niveau (ferme INTÉGRALITÉ)
+                tp_short_price = entry_short_moyen * (1 - next_short_pct / 100)
+
+                # 2. Double SHORT au MÊME niveau que TP
+                double_short_price = entry_short_moyen * (1 + next_short_pct / 100)
+
+                # Validation distance
                 current_price = self.get_price(pair)
-                if current_price and tp_short_price:
-                    distance_pct = abs((tp_short_price - current_price) / current_price) * 100
-                    if distance_pct < 0.2:
-                        logger.warning(f"TP Short doublé trop proche ({distance_pct:.2f}%) - Skip")
-                        print(f"⚠️  TP Short trop proche ({distance_pct:.2f}%) - Non placé")
-                        # Ne pas placer le TP mais continuer (placer double short quand même)
-                        tp_short_price = None
+                if current_price:
+                    distance_tp = abs((tp_short_price - current_price) / current_price) * 100
+                    distance_double = abs((double_short_price - current_price) / current_price) * 100
 
-                # 3. Placer ordre DOUBLER SHORT
-                try:
-                    double_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='sell', amount=current_size_short * 2,
-                        price=new_double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
-                    )
-                    verified = self.verify_order_placed(double_order['id'], pair)
-                    if verified:
-                        position.orders['double_short'] = double_order['id']
-                        logger.info(f"✅ Doubler Short @ {self.format_price(new_double_short_price, pair)}")
-                        print(f"✅ Doubler Short @ {self.format_price(new_double_short_price, pair)} (+{next_trigger}%)")
-                except Exception as e:
-                    logger.error(f"Erreur Doubler Short: {e}")
-                    print(f"❌ Erreur Doubler Short: {e}")
-
-                # 4. Placer TP SHORT (seulement si pas trop proche)
-                if tp_short_price:
-                    try:
-                        tp_order = self.exchange.create_order(
-                            symbol=pair, type='limit', side='buy', amount=current_size_short,
-                            price=tp_short_price, params={'tradeSide': 'close', 'holdSide': 'short'}
-                        )
-                        verified = self.verify_order_placed(tp_order['id'], pair)
-                        if verified:
-                            position.orders['tp_short'] = tp_order['id']
-                            profit_pct = ((current_entry_short - tp_short_price) / current_entry_short) * 100
-                            logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)}")
-                            print(f"✅ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} ({profit_pct:+.2f}%)")
-                    except Exception as e:
-                        logger.error(f"Erreur TP Short: {e}")
-                        print(f"❌ Erreur TP Short: {e}")
-                else:
-                    logger.info("TP Short skippé (trop proche du prix actuel)")
-                    print("⏭️  TP Short non placé (trop proche)")
-
-            # ORDRES POUR LE NOUVEAU LONG (réouvert au niveau Fib 0)
-            long_data = real_pos.get('long')
-            if long_data:
-                new_long_size = long_data['size']
-                new_long_entry = long_data['entry_price']
-
-                # TP Long FIXE à +0.3%
-                TP_PCT = 0.3
-                tp_long_price = new_long_entry * (1 + TP_PCT / 100)
-
-                # Validation: Vérifier distance minimale
-                current_price = self.get_price(pair)
-                if current_price and tp_long_price:
-                    distance_pct = abs((tp_long_price - current_price) / current_price) * 100
-                    if distance_pct < 0.2:
-                        logger.warning(f"TP Long trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
-                        print(f"⚠️  TP Long trop proche du prix actuel ({distance_pct:.2f}%) - Non placé")
+                    if distance_tp < 0.2 or distance_double < 0.2:
+                        logger.warning(f"Ordres SHORT trop proches (TP:{distance_tp:.2f}%, Double:{distance_double:.2f}%) - Skip")
+                        print(f"⚠️ Ordres SHORT trop proches - Non placés")
                         return
 
-                # Niveau Fibonacci pour doublement (pas pour TP!)
-                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.236
-
-                # Placer TP Long
+                # 3. Placer TP SHORT (INTÉGRALITÉ)
                 try:
-                    tp_long_order = self.place_tpsl_order(
-                        symbol=pair,
-                        plan_type='profit_plan',
-                        trigger_price=tp_long_price,
-                        hold_side='long',
-                        size=new_long_size
-                    )
-                    if tp_long_order and tp_long_order.get('id'):
-                        position.orders['tp_long'] = tp_long_order['id']
-                        logger.info(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)}")
-                        print(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)} (+{TP_PCT}%)")
-                except Exception as e:
-                    logger.error(f"Erreur TP Long: {e}")
-                    print(f"❌ Erreur TP Long: {e}")
-
-                # Doubler Long au prochain niveau Fibonacci (si prix descend)
-                double_long_price = new_long_entry * (1 - first_fib_level / 100)
-
-                try:
-                    double_long_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='buy', amount=new_long_size * 2,
-                        price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-                    )
-                    verified = self.verify_order_placed(double_long_order['id'], pair)
-                    if verified:
-                        position.orders['double_long'] = double_long_order['id']
-                        logger.info(f"✅ Doubler Long @ {self.format_price(double_long_price, pair)}")
-                        print(f"✅ Doubler Long @ {self.format_price(double_long_price, pair)} (-{first_fib_level}%)")
-                except Exception as e:
-                    logger.error(f"Erreur Doubler Long: {e}")
-                    print(f"❌ Erreur Doubler Long: {e}")
-
-        elif direction == 'down':  # Prix a descendu → LONG doublé + NOUVEAU SHORT réouvert
-
-            # ORDRES POUR LE LONG (doublé)
-            long_data = real_pos.get('long')
-            if long_data:
-                current_size_long = long_data['size']
-                current_entry_long = long_data['entry_price']
-
-                # 1. Calculer prix du prochain doublement Long
-                new_double_long_price = position.entry_price_long * (1 - next_trigger / 100)
-
-                # 2. Calculer prix du TP Long (prix moyen après doublement +0.3%)
-                tp_long_price = self.calculate_breakeven_tp_price(position, real_pos, 'down')
-                if not tp_long_price:
-                    tp_long_price = current_entry_long * 1.003  # Fallback +0.3%
-
-                # 2b. Validation: Vérifier distance minimale TP LONG
-                current_price = self.get_price(pair)
-                if current_price and tp_long_price:
-                    distance_pct = abs((tp_long_price - current_price) / current_price) * 100
-                    if distance_pct < 0.2:
-                        logger.warning(f"TP Long doublé trop proche ({distance_pct:.2f}%) - Skip")
-                        print(f"⚠️  TP Long trop proche ({distance_pct:.2f}%) - Non placé")
-                        # Ne pas placer le TP mais continuer (placer double long quand même)
-                        tp_long_price = None
-
-                # 3. Placer ordre DOUBLER LONG
-                try:
-                    double_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='buy', amount=current_size_long * 2,
-                        price=new_double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-                    )
-                    verified = self.verify_order_placed(double_order['id'], pair)
-                    if verified:
-                        position.orders['double_long'] = double_order['id']
-                        logger.info(f"✅ Doubler Long @ {self.format_price(new_double_long_price, pair)}")
-                        print(f"✅ Doubler Long @ {self.format_price(new_double_long_price, pair)} (-{next_trigger}%)")
-                except Exception as e:
-                    logger.error(f"Erreur Doubler Long: {e}")
-                    print(f"❌ Erreur Doubler Long: {e}")
-
-                # 4. Placer TP LONG (seulement si pas trop proche)
-                if tp_long_price:
-                    try:
-                        tp_order = self.exchange.create_order(
-                            symbol=pair, type='limit', side='sell', amount=current_size_long,
-                            price=tp_long_price, params={'tradeSide': 'close', 'holdSide': 'long'}
-                        )
-                        verified = self.verify_order_placed(tp_order['id'], pair)
-                        if verified:
-                            position.orders['tp_long'] = tp_order['id']
-                            profit_pct = ((tp_long_price - current_entry_long) / current_entry_long) * 100
-                            logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)}")
-                            print(f"✅ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} ({profit_pct:+.2f}%)")
-                    except Exception as e:
-                        logger.error(f"Erreur TP Long: {e}")
-                        print(f"❌ Erreur TP Long: {e}")
-                else:
-                    logger.info("TP Long skippé (trop proche du prix actuel)")
-                    print("⏭️  TP Long non placé (trop proche)")
-
-            # ORDRES POUR LE NOUVEAU SHORT (réouvert au niveau Fib 0)
-            short_data = real_pos.get('short')
-            if short_data:
-                new_short_size = short_data['size']
-                new_short_entry = short_data['entry_price']
-
-                # TP Short FIXE à -0.3%
-                TP_PCT = 0.3
-                tp_short_price = new_short_entry * (1 - TP_PCT / 100)
-
-                # Validation: Vérifier distance minimale
-                current_price = self.get_price(pair)
-                if current_price and tp_short_price:
-                    distance_pct = abs((tp_short_price - current_price) / current_price) * 100
-                    if distance_pct < 0.2:
-                        logger.warning(f"TP Short trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
-                        print(f"⚠️  TP Short trop proche du prix actuel ({distance_pct:.2f}%) - Non placé")
-                        return
-
-                # Niveau Fibonacci pour doublement (pas pour TP!)
-                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.236
-
-                # Placer TP Short
-                try:
+                    time.sleep(0.5)
                     tp_short_order = self.place_tpsl_order(
                         symbol=pair,
                         plan_type='profit_plan',
                         trigger_price=tp_short_price,
                         hold_side='short',
-                        size=new_short_size
+                        size=size_short_total  # INTÉGRALITÉ !
                     )
                     if tp_short_order and tp_short_order.get('id'):
                         position.orders['tp_short'] = tp_short_order['id']
-                        logger.info(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)}")
-                        print(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)} (-{TP_PCT}%)")
+                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} ({size_short_total:.0f} contrats, -{next_short_pct}%)")
+                        print(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{next_short_pct}%, Fib {next_short_level})")
                 except Exception as e:
                     logger.error(f"Erreur TP Short: {e}")
                     print(f"❌ Erreur TP Short: {e}")
 
-                # Doubler Short au prochain niveau Fibonacci (si prix monte)
-                double_short_price = new_short_entry * (1 + first_fib_level / 100)
-
+                # 4. Placer DOUBLE SHORT au même niveau
                 try:
+                    time.sleep(1)
+                    double_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='sell', amount=size_short_total * 2,
+                        price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+                    )
+                    verified = self.verify_order_placed(double_order['id'], pair)
+                    if verified:
+                        position.orders['double_short'] = double_order['id']
+                        logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} ({size_short_total * 2:.0f} contrats, +{next_short_pct}%)")
+                        print(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_short_pct}%, Fib {next_short_level})")
+                except Exception as e:
+                    logger.error(f"Erreur Double Short: {e}")
+                    print(f"❌ Erreur Double Short: {e}")
+
+            # ===== ORDRES POUR LE LONG (RÉOUVERT à Fib 0) =====
+            long_data = real_pos.get('long')
+            if long_data:
+                size_long = long_data['size']
+                entry_long = long_data['entry_price']
+
+                # Prochain niveau pour Long (réouvert à Fib 0, donc prochain = Fib 1)
+                next_long_level = 1  # Toujours Fib 1 car Long réouvert à Fib 0
+                next_long_pct = position.fib_levels[next_long_level]  # 0.3%
+
+                logger.info(f"LONG: Fib 0 ({size_long:.0f} contrats @ ${entry_long:.5f})")
+
+                # 1. TP LONG au Fib 1
+                tp_long_price = entry_long * (1 + next_long_pct / 100)
+
+                # 2. Double LONG au MÊME niveau (Fib 1)
+                double_long_price = entry_long * (1 - next_long_pct / 100)
+
+                # Validation distance
+                current_price = self.get_price(pair)
+                if current_price:
+                    distance_tp = abs((tp_long_price - current_price) / current_price) * 100
+                    distance_double = abs((double_long_price - current_price) / current_price) * 100
+
+                    if distance_tp < 0.2 or distance_double < 0.2:
+                        logger.warning(f"Ordres LONG trop proches (TP:{distance_tp:.2f}%, Double:{distance_double:.2f}%) - Skip")
+                        print(f"⚠️ Ordres LONG trop proches - Non placés")
+                        return
+
+                # 3. Placer TP LONG
+                try:
+                    time.sleep(0.5)
+                    tp_long_order = self.place_tpsl_order(
+                        symbol=pair,
+                        plan_type='profit_plan',
+                        trigger_price=tp_long_price,
+                        hold_side='long',
+                        size=size_long
+                    )
+                    if tp_long_order and tp_long_order.get('id'):
+                        position.orders['tp_long'] = tp_long_order['id']
+                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} ({size_long:.0f} contrats, +{next_long_pct}%)")
+                        print(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{next_long_pct}%, Fib {next_long_level})")
+                except Exception as e:
+                    logger.error(f"Erreur TP Long: {e}")
+                    print(f"❌ Erreur TP Long: {e}")
+
+                # 4. Placer DOUBLE LONG au même niveau
+                try:
+                    time.sleep(1)
+                    double_long_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='buy', amount=size_long * 2,
+                        price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                    )
+                    verified = self.verify_order_placed(double_long_order['id'], pair)
+                    if verified:
+                        position.orders['double_long'] = double_long_order['id']
+                        logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} ({size_long * 2:.0f} contrats, -{next_long_pct}%)")
+                        print(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_long_pct}%, Fib {next_long_level})")
+                except Exception as e:
+                    logger.error(f"Erreur Double Long: {e}")
+                    print(f"❌ Erreur Double Long: {e}")
+
+        elif direction == 'down':  # Prix a descendu → LONG doublé (Fib X+1) + SHORT réouvert (Fib 0)
+
+            # ===== ORDRES POUR LE LONG (DOUBLÉ) =====
+            long_data = real_pos.get('long')
+            if long_data:
+                size_long_total = long_data['size']  # Taille TOTALE après doublement
+                entry_long_moyen = long_data['entry_price']  # Prix MOYEN après doublement
+
+                # Prochain niveau pour Long
+                next_long_level = position.long_fib_level + 1
+                if next_long_level >= len(position.fib_levels):
+                    logger.info("✅ Fibonacci terminé pour LONG")
+                    return
+
+                next_long_pct = position.fib_levels[next_long_level]
+
+                logger.info(f"LONG: Fib {position.long_fib_level} ({size_long_total:.0f} contrats @ ${entry_long_moyen:.5f})")
+
+                # 1. TP LONG au prochain niveau (ferme INTÉGRALITÉ)
+                tp_long_price = entry_long_moyen * (1 + next_long_pct / 100)
+
+                # 2. Double LONG au MÊME niveau que TP
+                double_long_price = entry_long_moyen * (1 - next_long_pct / 100)
+
+                # Validation distance
+                current_price = self.get_price(pair)
+                if current_price:
+                    distance_tp = abs((tp_long_price - current_price) / current_price) * 100
+                    distance_double = abs((double_long_price - current_price) / current_price) * 100
+
+                    if distance_tp < 0.2 or distance_double < 0.2:
+                        logger.warning(f"Ordres LONG trop proches (TP:{distance_tp:.2f}%, Double:{distance_double:.2f}%) - Skip")
+                        print(f"⚠️ Ordres LONG trop proches - Non placés")
+                        return
+
+                # 3. Placer TP LONG (INTÉGRALITÉ)
+                try:
+                    time.sleep(0.5)
+                    tp_long_order = self.place_tpsl_order(
+                        symbol=pair,
+                        plan_type='profit_plan',
+                        trigger_price=tp_long_price,
+                        hold_side='long',
+                        size=size_long_total  # INTÉGRALITÉ !
+                    )
+                    if tp_long_order and tp_long_order.get('id'):
+                        position.orders['tp_long'] = tp_long_order['id']
+                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} ({size_long_total:.0f} contrats, +{next_long_pct}%)")
+                        print(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{next_long_pct}%, Fib {next_long_level})")
+                except Exception as e:
+                    logger.error(f"Erreur TP Long: {e}")
+                    print(f"❌ Erreur TP Long: {e}")
+
+                # 4. Placer DOUBLE LONG au même niveau
+                try:
+                    time.sleep(1)
+                    double_order = self.exchange.create_order(
+                        symbol=pair, type='limit', side='buy', amount=size_long_total * 2,
+                        price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                    )
+                    verified = self.verify_order_placed(double_order['id'], pair)
+                    if verified:
+                        position.orders['double_long'] = double_order['id']
+                        logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} ({size_long_total * 2:.0f} contrats, -{next_long_pct}%)")
+                        print(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_long_pct}%, Fib {next_long_level})")
+                except Exception as e:
+                    logger.error(f"Erreur Double Long: {e}")
+                    print(f"❌ Erreur Double Long: {e}")
+
+            # ===== ORDRES POUR LE SHORT (RÉOUVERT à Fib 0) =====
+            short_data = real_pos.get('short')
+            if short_data:
+                size_short = short_data['size']
+                entry_short = short_data['entry_price']
+
+                # Prochain niveau pour Short (réouvert à Fib 0, donc prochain = Fib 1)
+                next_short_level = 1  # Toujours Fib 1 car Short réouvert à Fib 0
+                next_short_pct = position.fib_levels[next_short_level]  # 0.3%
+
+                logger.info(f"SHORT: Fib 0 ({size_short:.0f} contrats @ ${entry_short:.5f})")
+
+                # 1. TP SHORT au Fib 1
+                tp_short_price = entry_short * (1 - next_short_pct / 100)
+
+                # 2. Double SHORT au MÊME niveau (Fib 1)
+                double_short_price = entry_short * (1 + next_short_pct / 100)
+
+                # Validation distance
+                current_price = self.get_price(pair)
+                if current_price:
+                    distance_tp = abs((tp_short_price - current_price) / current_price) * 100
+                    distance_double = abs((double_short_price - current_price) / current_price) * 100
+
+                    if distance_tp < 0.2 or distance_double < 0.2:
+                        logger.warning(f"Ordres SHORT trop proches (TP:{distance_tp:.2f}%, Double:{distance_double:.2f}%) - Skip")
+                        print(f"⚠️ Ordres SHORT trop proches - Non placés")
+                        return
+
+                # 3. Placer TP SHORT
+                try:
+                    time.sleep(0.5)
+                    tp_short_order = self.place_tpsl_order(
+                        symbol=pair,
+                        plan_type='profit_plan',
+                        trigger_price=tp_short_price,
+                        hold_side='short',
+                        size=size_short
+                    )
+                    if tp_short_order and tp_short_order.get('id'):
+                        position.orders['tp_short'] = tp_short_order['id']
+                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} ({size_short:.0f} contrats, -{next_short_pct}%)")
+                        print(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{next_short_pct}%, Fib {next_short_level})")
+                except Exception as e:
+                    logger.error(f"Erreur TP Short: {e}")
+                    print(f"❌ Erreur TP Short: {e}")
+
+                # 4. Placer DOUBLE SHORT au même niveau
+                try:
+                    time.sleep(1)
                     double_short_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='sell', amount=new_short_size * 2,
+                        symbol=pair, type='limit', side='sell', amount=size_short * 2,
                         price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
                     )
                     verified = self.verify_order_placed(double_short_order['id'], pair)
                     if verified:
                         position.orders['double_short'] = double_short_order['id']
-                        logger.info(f"✅ Doubler Short @ {self.format_price(double_short_price, pair)}")
-                        print(f"✅ Doubler Short @ {self.format_price(double_short_price, pair)} (+{first_fib_level}%)")
+                        logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} ({size_short * 2:.0f} contrats, +{next_short_pct}%)")
+                        print(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_short_pct}%, Fib {next_short_level})")
                 except Exception as e:
-                    logger.error(f"Erreur Doubler Short: {e}")
-                    print(f"❌ Erreur Doubler Short: {e}")
+                    logger.error(f"Erreur Double Short: {e}")
+                    print(f"❌ Erreur Double Short: {e}")
 
     def open_next_hedge(self):
         """Ouvre un nouveau hedge sur la prochaine paire disponible"""
@@ -2219,10 +2257,10 @@ Erreurs totales: {self.error_count}
                 pair_msg += f"   P&L: ${pnl:+.2f} (ROE: {long_data['pnl_percentage']:+.1f}%)\n"
 
                 # Afficher TP
-                next_trigger = pos.get_next_trigger_pct()
+                next_trigger = pos.get_next_long_trigger_pct()
                 if next_trigger:
-                    next_price = pos.entry_price_long * (1 + next_trigger / 100)
-                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (+{next_trigger}%)\n"
+                    next_price = long_data['entry_price'] * (1 + next_trigger / 100)
+                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (+{next_trigger}%, Fib {pos.long_fib_level + 1})\n"
 
             # SHORT (si ouvert)
             if short_data:
@@ -2240,10 +2278,10 @@ Erreurs totales: {self.error_count}
                 pair_msg += f"   💀 Liq: {self.format_price(short_data['liquidation_price'], pair)}\n"
 
                 # Afficher TP
-                next_trigger = pos.get_next_trigger_pct()
+                next_trigger = pos.get_next_short_trigger_pct()
                 if next_trigger:
-                    next_price = pos.entry_price_short * (1 - next_trigger / 100)
-                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (-{next_trigger}%)\n"
+                    next_price = short_data['entry_price'] * (1 - next_trigger / 100)
+                    pair_msg += f"   🎯 TP: {self.format_price(next_price, pair)} (-{next_trigger}%, Fib {pos.short_fib_level + 1})\n"
 
             message_parts.append(pair_msg)
 
@@ -2445,25 +2483,27 @@ Erreurs totales: {self.error_count}
                         if position.long_open:
                             entry_long = position.entry_price_long
                             change_pct = ((current_price - entry_long) / entry_long) * 100
-                            next_trigger = position.get_next_trigger_pct()
+                            next_trigger = position.get_next_long_trigger_pct()
 
-                            print(f"   📈 LONG:")
+                            print(f"   📈 LONG (Fib {position.long_fib_level}):")
                             print(f"      Prix entrée: {self.format_price(entry_long, pair)}")
                             print(f"      Variation: {change_pct:+.4f}%")
-                            print(f"      Trigger: +{next_trigger}%")
-                            print(f"      Distance trigger: {(next_trigger - change_pct):.4f}%")
+                            if next_trigger:
+                                print(f"      Trigger TP: +{next_trigger}% (Fib {position.long_fib_level + 1})")
+                                print(f"      Distance trigger: {(next_trigger - change_pct):.4f}%")
 
                         # Short (si ouvert)
                         if position.short_open:
                             entry_short = position.entry_price_short
                             change_pct = ((current_price - entry_short) / entry_short) * 100
-                            next_trigger = position.get_next_trigger_pct()
+                            next_trigger = position.get_next_short_trigger_pct()
 
-                            print(f"   📉 SHORT:")
+                            print(f"   📉 SHORT (Fib {position.short_fib_level}):")
                             print(f"      Prix entrée: {self.format_price(entry_short, pair)}")
                             print(f"      Variation: {change_pct:+.4f}%")
-                            print(f"      Trigger baisse: -{next_trigger}%")
-                            print(f"      Distance trigger: {(abs(change_pct) - next_trigger):.4f}%")
+                            if next_trigger:
+                                print(f"      Trigger TP: -{next_trigger}% (Fib {position.short_fib_level + 1})")
+                                print(f"      Distance trigger: {(abs(change_pct) - next_trigger):.4f}%")
 
                 # Vérifier ordres exécutés
                 self.check_orders_status(iteration)
