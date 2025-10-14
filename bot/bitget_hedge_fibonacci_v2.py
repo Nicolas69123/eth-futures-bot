@@ -802,45 +802,50 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
     def calculate_breakeven_tp_price(self, position, real_pos_data, direction):
         """
-        Calcule le prix de TP pour garantir un profit global positif
+        Calcule le prix de TP pour position doublée (utilise prix moyen)
 
         Args:
             position: HedgePosition object
             real_pos_data: Données réelles de la position depuis API
-            direction: 'up' (prix a monté) ou 'down' (prix a descendu)
+            direction: 'up' (prix a monté, SHORT doublé) ou 'down' (prix a descendu, LONG doublé)
 
         Returns:
-            float: Prix du TP qui garantit profit
+            float: Prix du TP à 0.3% du prix moyen, ou None si pas de données
         """
+        TP_PCT = 0.3  # TP fixe à 0.3%
+
         if direction == 'up':
             # Le short a été doublé, on veut fermer avec profit
             short_data = real_pos_data.get('short')
             if not short_data:
+                logger.warning("calculate_breakeven_tp_price: Pas de données SHORT")
                 return None
 
             # Prix moyen du short après doublement
-            avg_entry = short_data['entry_price']
+            avg_entry = short_data.get('entry_price')
+            if not avg_entry:
+                logger.warning("calculate_breakeven_tp_price: entry_price SHORT manquant")
+                return None
 
-            # Pour un short, profit si prix descend
-            # On veut au moins 0.5% de profit global
-            target_profit_pct = 0.5
-            tp_price = avg_entry * (1 - target_profit_pct / 100)
-
+            # Pour un short, profit si prix descend → TP à -0.3%
+            tp_price = avg_entry * (1 - TP_PCT / 100)
             return tp_price
 
         elif direction == 'down':
             # Le long a été doublé, on veut fermer avec profit
             long_data = real_pos_data.get('long')
             if not long_data:
+                logger.warning("calculate_breakeven_tp_price: Pas de données LONG")
                 return None
 
             # Prix moyen du long après doublement
-            avg_entry = long_data['entry_price']
+            avg_entry = long_data.get('entry_price')
+            if not avg_entry:
+                logger.warning("calculate_breakeven_tp_price: entry_price LONG manquant")
+                return None
 
-            # Pour un long, profit si prix monte
-            target_profit_pct = 0.5
-            tp_price = avg_entry * (1 + target_profit_pct / 100)
-
+            # Pour un long, profit si prix monte → TP à +0.3%
+            tp_price = avg_entry * (1 + TP_PCT / 100)
             return tp_price
 
         return None
@@ -1594,10 +1599,10 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # 1. Calculer prix du prochain doublement Short
                 new_double_short_price = position.entry_price_short * (1 + next_trigger / 100)
 
-                # 2. Calculer prix du TP Short
+                # 2. Calculer prix du TP Short (prix moyen après doublement -0.3%)
                 tp_short_price = self.calculate_breakeven_tp_price(position, real_pos, 'up')
                 if not tp_short_price:
-                    tp_short_price = current_entry_short * 0.995  # Fallback
+                    tp_short_price = current_entry_short * 0.997  # Fallback -0.3%
 
                 # 3. Placer ordre DOUBLER SHORT
                 try:
@@ -1636,9 +1641,21 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 new_long_size = long_data['size']
                 new_long_entry = long_data['entry_price']
 
-                # TP Long au premier niveau Fibonacci (utilise fib_levels[0])
-                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.1
-                tp_long_price = new_long_entry * (1 + first_fib_level / 100)
+                # TP Long FIXE à +0.3%
+                TP_PCT = 0.3
+                tp_long_price = new_long_entry * (1 + TP_PCT / 100)
+
+                # Validation: Vérifier distance minimale
+                current_price = self.get_price(pair)
+                if current_price:
+                    distance_pct = abs((tp_long_price - current_price) / current_price) * 100
+                    if distance_pct < 0.2:
+                        logger.warning(f"TP Long trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
+                        print(f"⚠️  TP Long trop proche du prix actuel ({distance_pct:.2f}%) - Non placé")
+                        return
+
+                # Niveau Fibonacci pour doublement (pas pour TP!)
+                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.236
 
                 # Placer TP Long
                 try:
@@ -1652,12 +1669,12 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     if tp_long_order and tp_long_order.get('id'):
                         position.orders['tp_long'] = tp_long_order['id']
                         logger.info(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)}")
-                        print(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)} (+{first_fib_level}%)")
+                        print(f"✅ TP Long (nouveau) @ {self.format_price(tp_long_price, pair)} (+{TP_PCT}%)")
                 except Exception as e:
                     logger.error(f"Erreur TP Long: {e}")
                     print(f"❌ Erreur TP Long: {e}")
 
-                # Doubler Long (si prix descend depuis le nouveau point d'entrée)
+                # Doubler Long au prochain niveau Fibonacci (si prix descend)
                 double_long_price = new_long_entry * (1 - first_fib_level / 100)
 
                 try:
@@ -1685,10 +1702,10 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # 1. Calculer prix du prochain doublement Long
                 new_double_long_price = position.entry_price_long * (1 - next_trigger / 100)
 
-                # 2. Calculer prix du TP Long
+                # 2. Calculer prix du TP Long (prix moyen après doublement +0.3%)
                 tp_long_price = self.calculate_breakeven_tp_price(position, real_pos, 'down')
                 if not tp_long_price:
-                    tp_long_price = current_entry_long * 1.005  # Fallback
+                    tp_long_price = current_entry_long * 1.003  # Fallback +0.3%
 
                 # 3. Placer ordre DOUBLER LONG
                 try:
@@ -1727,9 +1744,21 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 new_short_size = short_data['size']
                 new_short_entry = short_data['entry_price']
 
-                # TP Short au premier niveau Fibonacci (utilise fib_levels[0])
-                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.1
-                tp_short_price = new_short_entry * (1 - first_fib_level / 100)
+                # TP Short FIXE à -0.3%
+                TP_PCT = 0.3
+                tp_short_price = new_short_entry * (1 - TP_PCT / 100)
+
+                # Validation: Vérifier distance minimale
+                current_price = self.get_price(pair)
+                if current_price:
+                    distance_pct = abs((tp_short_price - current_price) / current_price) * 100
+                    if distance_pct < 0.2:
+                        logger.warning(f"TP Short trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
+                        print(f"⚠️  TP Short trop proche du prix actuel ({distance_pct:.2f}%) - Non placé")
+                        return
+
+                # Niveau Fibonacci pour doublement (pas pour TP!)
+                first_fib_level = position.fib_levels[0] if hasattr(position, 'fib_levels') else 0.236
 
                 # Placer TP Short
                 try:
@@ -1743,12 +1772,12 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     if tp_short_order and tp_short_order.get('id'):
                         position.orders['tp_short'] = tp_short_order['id']
                         logger.info(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)}")
-                        print(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)} (-{first_fib_level}%)")
+                        print(f"✅ TP Short (nouveau) @ {self.format_price(tp_short_price, pair)} (-{TP_PCT}%)")
                 except Exception as e:
                     logger.error(f"Erreur TP Short: {e}")
                     print(f"❌ Erreur TP Short: {e}")
 
-                # Doubler Short (si prix monte depuis le nouveau point d'entrée)
+                # Doubler Short au prochain niveau Fibonacci (si prix monte)
                 double_short_price = new_short_entry * (1 + first_fib_level / 100)
 
                 try:
