@@ -73,6 +73,10 @@ class HedgePosition:
         self.long_fib_level = 0   # Long commence à Fib 0
         self.short_fib_level = 0  # Short commence à Fib 0
 
+        # Tracking tailles pour détecter doublements (CAS 3)
+        self.long_size_previous = 0   # Sera mis à jour après API
+        self.short_size_previous = 0  # Sera mis à jour après API
+
         # IDs des ordres actifs
         self.orders = {
             'tp_long': None,      # Take profit long
@@ -1173,6 +1177,11 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # Créer position tracking
             position = HedgePosition(pair, self.INITIAL_MARGIN, entry_long, entry_short)
+
+            # Stocker tailles initiales pour détection doublements (CAS 3)
+            position.long_size_previous = real_pos['long']['size']
+            position.short_size_previous = real_pos['short']['size']
+
             self.active_positions[pair] = position
 
             # Attendre 3s avant de placer les TP (Bitget refuse si trop rapide)
@@ -1328,18 +1337,215 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             print(f"❌ Erreur ouverture: {e}")
             return False
 
+    def handle_double_alone(self, pair, position, real_pos, side):
+        """
+        Gère CAS 3: Position doublée SANS TP de l'autre côté
+        Remplace SEULEMENT les ordres de cette position (2 ordres, pas 4)
+
+        Args:
+            side: 'long' ou 'short' (quelle position a doublé)
+        """
+        logger.info(f"[{pair}] CAS 3: {side.upper()} doublé seul - Replacement 2 ordres {side}")
+        print(f"\n🔧 Replacement ordres {side.upper()} uniquement...")
+
+        if side == 'long':
+            # Long doublé → Incrémenter long_fib_level
+            position.long_fib_level += 1
+
+            # Annuler anciens ordres LONG
+            if position.orders['tp_long']:
+                self.cancel_order(position.orders['tp_long'], pair)
+                position.orders['tp_long'] = None
+            time.sleep(0.5)
+
+            if position.orders['double_long']:
+                self.cancel_order(position.orders['double_long'], pair)
+                position.orders['double_long'] = None
+            time.sleep(0.5)
+
+            # Récupérer données Long depuis API
+            long_data = real_pos.get('long')
+            if not long_data:
+                logger.error("Long data manquant après doublement!")
+                return
+
+            size_long_total = long_data['size']
+            entry_long_moyen = long_data['entry_price']
+
+            logger.info(f"LONG doublé: {size_long_total:.0f} contrats @ ${entry_long_moyen:.5f} (Fib {position.long_fib_level})")
+
+            # Calculer prochain niveau
+            next_long_level = position.long_fib_level + 1
+            if next_long_level >= len(position.fib_levels):
+                logger.info("✅ Fibonacci terminé pour LONG")
+                return
+
+            next_long_pct = position.fib_levels[next_long_level]
+
+            # Placer nouveau TP Long (0.3% fixe, INTÉGRALITÉ)
+            TP_FIXE = 0.3
+            tp_long_price = entry_long_moyen * (1 + TP_FIXE / 100)
+
+            try:
+                time.sleep(0.5)
+                tp_order = self.place_tpsl_order(
+                    symbol=pair,
+                    plan_type='profit_plan',
+                    trigger_price=tp_long_price,
+                    hold_side='long',
+                    size=size_long_total
+                )
+                if tp_order and tp_order.get('id'):
+                    position.orders['tp_long'] = tp_order['id']
+                    logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} ({size_long_total:.0f} contrats)")
+                    print(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (-0.3% fixe)")
+            except Exception as e:
+                logger.error(f"Erreur TP Long: {e}")
+
+            # Placer nouveau Double Long (niveau Fib suivant)
+            double_long_price = entry_long_moyen * (1 - next_long_pct / 100)
+
+            try:
+                time.sleep(1)
+                double_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=size_long_total * 2,
+                    price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                )
+                verified = self.verify_order_placed(double_order['id'], pair)
+                if verified:
+                    position.orders['double_long'] = double_order['id']
+                    logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} ({size_long_total * 2:.0f} contrats, -{next_long_pct}%)")
+                    print(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_long_pct}%, Fib {next_long_level})")
+            except Exception as e:
+                logger.error(f"Erreur Double Long: {e}")
+
+        elif side == 'short':
+            # Short doublé → Incrémenter short_fib_level
+            position.short_fib_level += 1
+
+            # Annuler anciens ordres SHORT
+            if position.orders['tp_short']:
+                self.cancel_order(position.orders['tp_short'], pair)
+                position.orders['tp_short'] = None
+            time.sleep(0.5)
+
+            if position.orders['double_short']:
+                self.cancel_order(position.orders['double_short'], pair)
+                position.orders['double_short'] = None
+            time.sleep(0.5)
+
+            # Récupérer données Short depuis API
+            short_data = real_pos.get('short')
+            if not short_data:
+                logger.error("Short data manquant après doublement!")
+                return
+
+            size_short_total = short_data['size']
+            entry_short_moyen = short_data['entry_price']
+
+            logger.info(f"SHORT doublé: {size_short_total:.0f} contrats @ ${entry_short_moyen:.5f} (Fib {position.short_fib_level})")
+
+            # Calculer prochain niveau
+            next_short_level = position.short_fib_level + 1
+            if next_short_level >= len(position.fib_levels):
+                logger.info("✅ Fibonacci terminé pour SHORT")
+                return
+
+            next_short_pct = position.fib_levels[next_short_level]
+
+            # Placer nouveau TP Short (0.3% fixe, INTÉGRALITÉ)
+            TP_FIXE = 0.3
+            tp_short_price = entry_short_moyen * (1 - TP_FIXE / 100)
+
+            try:
+                time.sleep(0.5)
+                tp_order = self.place_tpsl_order(
+                    symbol=pair,
+                    plan_type='profit_plan',
+                    trigger_price=tp_short_price,
+                    hold_side='short',
+                    size=size_short_total
+                )
+                if tp_order and tp_order.get('id'):
+                    position.orders['tp_short'] = tp_order['id']
+                    logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} ({size_short_total:.0f} contrats)")
+                    print(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-0.3% fixe)")
+            except Exception as e:
+                logger.error(f"Erreur TP Short: {e}")
+
+            # Placer nouveau Double Short (niveau Fib suivant)
+            double_short_price = entry_short_moyen * (1 + next_short_pct / 100)
+
+            try:
+                time.sleep(1)
+                double_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='sell', amount=size_short_total * 2,
+                    price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+                )
+                verified = self.verify_order_placed(double_order['id'], pair)
+                if verified:
+                    position.orders['double_short'] = double_order['id']
+                    logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} ({size_short_total * 2:.0f} contrats, +{next_short_pct}%)")
+                    print(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_short_pct}%, Fib {next_short_level})")
+            except Exception as e:
+                logger.error(f"Erreur Double Short: {e}")
+
     def check_orders_status(self, iteration=0):
-        """Vérifie l'état des ordres (LIMIT + TP/SL plan)"""
+        """Vérifie l'état des ordres (LIMIT + TP/SL plan)
+
+        Détecte 3 cas:
+        CAS 1: TP Long exécuté (Long disparu)
+        CAS 2: TP Short exécuté (Short disparu)
+        CAS 3: Double exécuté seul (taille augmente SANS que l'autre disparaisse)
+        """
 
         for pair, position in list(self.active_positions.items()):
             try:
+                # INTERROGER API pour obtenir état actuel
+                real_pos = self.get_real_positions(pair)
+                if not real_pos:
+                    continue
+
+                # ===== CAS 3 : DÉTECTION DOUBLEMENTS SEULS (SANS TP) =====
+                long_doubled_alone = False
+                short_doubled_alone = False
+
+                # Détecter Long doublé
+                if real_pos.get('long') and position.long_size_previous > 0:
+                    current_long_size = real_pos['long']['size']
+                    if current_long_size > position.long_size_previous * 1.5:  # Tolérance 50%
+                        long_doubled_alone = True
+                        logger.info(f"🔍 CAS 3 détecté: LONG doublé {position.long_size_previous:.0f} → {current_long_size:.0f}")
+                        print(f"\n⚡ LONG DOUBLÉ SEUL: {position.long_size_previous:.0f} → {current_long_size:.0f}")
+
+                # Détecter Short doublé
+                if real_pos.get('short') and position.short_size_previous > 0:
+                    current_short_size = real_pos['short']['size']
+                    if current_short_size > position.short_size_previous * 1.5:
+                        short_doubled_alone = True
+                        logger.info(f"🔍 CAS 3 détecté: SHORT doublé {position.short_size_previous:.0f} → {current_short_size:.0f}")
+                        print(f"\n⚡ SHORT DOUBLÉ SEUL: {position.short_size_previous:.0f} → {current_short_size:.0f}")
+
+                # Gérer CAS 3 Long doublé
+                if long_doubled_alone:
+                    self.handle_double_alone(pair, position, real_pos, side='long')
+                    position.long_size_previous = real_pos['long']['size']  # Mettre à jour
+                    continue  # Skip CAS 1/2 pour cette itération
+
+                # Gérer CAS 3 Short doublé
+                if short_doubled_alone:
+                    self.handle_double_alone(pair, position, real_pos, side='short')
+                    position.short_size_previous = real_pos['short']['size']  # Mettre à jour
+                    continue  # Skip CAS 1/2 pour cette itération
+
+                # ===== CAS 1 & 2 : DÉTECTION TP EXÉCUTÉS =====
+
                 # Vérifier si TP Long exécuté (par disparition de position)
                 tp_long_executed = False
                 if position.orders['tp_long'] and position.long_open:
                     # Vérifier si la position Long existe encore
-                    real_pos = self.get_real_positions(pair)
-                    if not real_pos or not real_pos.get('long'):
-                        print(f"   ✅ TP Long EXÉCUTÉ (position fermée)")
+                    if not real_pos.get('long'):
+                        print(f"   ✅ CAS 1: TP Long EXÉCUTÉ (position fermée)")
                         tp_long_executed = True
                     else:
                         # Position existe encore, TP pas encore atteint
@@ -1350,9 +1556,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 tp_short_executed = False
                 if position.orders['tp_short'] and position.short_open:
                     # Vérifier si la position Short existe encore
-                    real_pos = self.get_real_positions(pair) if not tp_long_executed else self.get_real_positions(pair)
-                    if not real_pos or not real_pos.get('short'):
-                        print(f"   ✅ TP Short EXÉCUTÉ (position fermée)")
+                    if not real_pos.get('short'):
+                        print(f"   ✅ CAS 2: TP Short EXÉCUTÉ (position fermée)")
                         tp_short_executed = True
                     else:
                         # Position existe encore, TP pas encore atteint
@@ -1464,6 +1669,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
 
+                    # Mettre à jour tailles pour détection future (CAS 3)
+                    time.sleep(1)
+                    real_pos_updated = self.get_real_positions(pair)
+                    if real_pos_updated:
+                        if real_pos_updated.get('long'):
+                            position.long_size_previous = real_pos_updated['long']['size']
+                        if real_pos_updated.get('short'):
+                            position.short_size_previous = real_pos_updated['short']['size']
+
                     # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
                     # self.open_next_hedge()  # DÉSACTIVÉ
 
@@ -1571,6 +1785,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                         message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
                         self.send_telegram("\n".join(message_parts))
+
+                    # Mettre à jour tailles pour détection future (CAS 3)
+                    time.sleep(1)
+                    real_pos_updated = self.get_real_positions(pair)
+                    if real_pos_updated:
+                        if real_pos_updated.get('long'):
+                            position.long_size_previous = real_pos_updated['long']['size']
+                        if real_pos_updated.get('short'):
+                            position.short_size_previous = real_pos_updated['short']['size']
 
                     # NE PLUS ouvrir nouveau hedge (on reste sur les mêmes paires)
                     # self.open_next_hedge()  # DÉSACTIVÉ

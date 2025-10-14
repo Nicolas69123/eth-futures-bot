@@ -153,6 +153,29 @@ Short: 6750 contrats @ prix_moyen (Fib 3 SHORT)
 
 ---
 
+## 🔍 DÉTECTION DES ÉVÉNEMENTS
+
+**INTERROGER API toutes les 1 seconde pour détecter 3 cas :**
+
+### CAS 1 : TP Long exécuté
+- **Détection :** Position Long disparue (exists → n'existe plus)
+- **Actions :** Annuler ordres (TP Short, Double Long) + Ré-ouvrir Long + Replacer 4 ordres
+
+### CAS 2 : TP Short exécuté
+- **Détection :** Position Short disparue (exists → n'existe plus)
+- **Actions :** Annuler ordres (TP Long, Double Short) + Ré-ouvrir Short + Replacer 4 ordres
+
+### CAS 3 : Double exécuté SEUL (sans TP)
+- **Détection :** Taille position augmente (ex: Short 750 → 2250) SANS que l'autre disparaisse
+- **Actions :** Annuler ordres de CETTE position uniquement + Replacer 2 ordres (TP + Double)
+- **Important :** NE PAS TOUCHER l'autre position !
+
+**Exemples CAS 3 :**
+- Short 750 → 2250 : Replacer TP Short + Double Short uniquement
+- Long 750 → 2250 : Replacer TP Long + Double Long uniquement
+
+---
+
 ## 🎯 RÈGLES CRITIQUES
 
 1. **Fib 0 = Prix MARKET** (ouverture/réouverture)
@@ -160,11 +183,12 @@ Short: 6750 contrats @ prix_moyen (Fib 3 SHORT)
 3. **Double suit Fibonacci** (0.3%, 0.382%, 0.5%, 0.618%, 1.0%, etc.)
 4. **2 niveaux séparés:** `long_fib_level` et `short_fib_level` indépendants
 5. **TP ferme TOUT:** Toujours placer TP avec `size_total` (100% position)
-6. **INTERROGER API:** Après chaque doublement, récupérer `prix_moyen` et `size_total`
+6. **INTERROGER API:** Toutes les 1 seconde pour détecter changements
 7. **Délais:** 500ms annulation, 1s ordre LIMIT, 2s ordre MARKET
 8. **Position réouverte = toujours Fib 0** (retour au début)
 9. **Position doublée = niveau suivant** (Fib 0→1→2→3...)
 10. **Déséquilibre NORMAL** (pas d'alerte si L:250 S:6750)
+11. **Double SANS TP** : Replacer ordres de cette position UNIQUEMENT
 
 ---
 
