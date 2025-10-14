@@ -66,6 +66,10 @@ class HedgePosition:
         self.long_open = True
         self.short_open = True
 
+        # Tailles positions (pour détecter doublements effectifs)
+        self.long_size = 0    # Sera mis à jour après ouverture
+        self.short_size = 0   # Sera mis à jour après ouverture
+
         # Grille Fibonacci (en %) - Index 0 = Fib 0 (MARKET), 1 = Fib 1 (0.3%), etc.
         self.fib_levels = [0, 0.3, 0.382, 0.5, 0.618, 1.0, 1.618, 2.618, 4.236, 6.854, 11.09]
 
@@ -1175,6 +1179,11 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             position = HedgePosition(pair, self.INITIAL_MARGIN, entry_long, entry_short)
             self.active_positions[pair] = position
 
+            # Stocker tailles initiales pour détecter doublements
+            position.long_size = real_pos['long']['size']
+            position.short_size = real_pos['short']['size']
+            logger.info(f"Tailles initiales: Long {position.long_size:.0f}, Short {position.short_size:.0f}")
+
             # Attendre 3s avant de placer les TP (Bitget refuse si trop rapide)
             print("\n⏳ Attente 3s avant placement TP...")
             time.sleep(3)
@@ -1430,9 +1439,38 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         logger.error(f"❌ Erreur réouverture Long: {e}")
                         print(f"❌ Erreur réouverture Long: {e}")
 
-                    # Ajuster niveaux Fibonacci: Long réinitialisé, Short incrémenté
+                    # VÉRIFIER SI SHORT A VRAIMENT DOUBLÉ via API
+                    time.sleep(1)
+                    real_pos_check = self.get_real_positions(pair)
+                    short_doubled = False
+
+                    if real_pos_check and real_pos_check.get('short'):
+                        old_short_size = position.short_size
+                        new_short_size = real_pos_check['short']['size']
+
+                        # Tolérance 50% (si doublé, taille x3 minimum)
+                        if new_short_size > old_short_size * 1.5:
+                            short_doubled = True
+                            logger.info(f"✅ Short VRAIMENT doublé: {old_short_size:.0f} → {new_short_size:.0f}")
+                            print(f"✅ Short doublé confirmé: {old_short_size:.0f} → {new_short_size:.0f}")
+                        else:
+                            logger.warning(f"⚠️ Short PAS doublé: {old_short_size:.0f} → {new_short_size:.0f}")
+                            print(f"⚠️ Short pas doublé: {old_short_size:.0f} → {new_short_size:.0f}")
+
+                    # Ajuster niveaux Fibonacci
                     position.long_fib_level = 0   # Long réouvert au Fib 0
-                    position.short_fib_level += 1  # Short doublé, niveau suivant
+
+                    if short_doubled:
+                        position.short_fib_level += 1  # Short doublé, niveau suivant
+                        position.short_size = real_pos_check['short']['size']  # MAJ taille
+                        logger.info(f"Short Fib {position.short_fib_level - 1} → {position.short_fib_level}")
+                    else:
+                        logger.info(f"Short reste Fib {position.short_fib_level} (pas de doublement)")
+
+                    # MAJ taille Long
+                    if real_pos_check and real_pos_check.get('long'):
+                        position.long_size = real_pos_check['long']['size']
+
                     self.place_next_level_orders(pair, position, direction='up')
 
                     # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
@@ -1538,9 +1576,38 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         logger.error(f"❌ Erreur réouverture Short: {e}")
                         print(f"❌ Erreur réouverture Short: {e}")
 
-                    # Ajuster niveaux Fibonacci: Short réinitialisé, Long incrémenté
+                    # VÉRIFIER SI LONG A VRAIMENT DOUBLÉ via API
+                    time.sleep(1)
+                    real_pos_check = self.get_real_positions(pair)
+                    long_doubled = False
+
+                    if real_pos_check and real_pos_check.get('long'):
+                        old_long_size = position.long_size
+                        new_long_size = real_pos_check['long']['size']
+
+                        # Tolérance 50% (si doublé, taille x3 minimum)
+                        if new_long_size > old_long_size * 1.5:
+                            long_doubled = True
+                            logger.info(f"✅ Long VRAIMENT doublé: {old_long_size:.0f} → {new_long_size:.0f}")
+                            print(f"✅ Long doublé confirmé: {old_long_size:.0f} → {new_long_size:.0f}")
+                        else:
+                            logger.warning(f"⚠️ Long PAS doublé: {old_long_size:.0f} → {new_long_size:.0f}")
+                            print(f"⚠️ Long pas doublé: {old_long_size:.0f} → {new_long_size:.0f}")
+
+                    # Ajuster niveaux Fibonacci
                     position.short_fib_level = 0  # Short réouvert au Fib 0
-                    position.long_fib_level += 1   # Long doublé, niveau suivant
+
+                    if long_doubled:
+                        position.long_fib_level += 1   # Long doublé, niveau suivant
+                        position.long_size = real_pos_check['long']['size']  # MAJ taille
+                        logger.info(f"Long Fib {position.long_fib_level - 1} → {position.long_fib_level}")
+                    else:
+                        logger.info(f"Long reste Fib {position.long_fib_level} (pas de doublement)")
+
+                    # MAJ taille Short
+                    if real_pos_check and real_pos_check.get('short'):
+                        position.short_size = real_pos_check['short']['size']
+
                     self.place_next_level_orders(pair, position, direction='down')
 
                     # MESSAGE TELEGRAM AVEC VRAIES DONNÉES
