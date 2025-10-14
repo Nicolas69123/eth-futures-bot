@@ -599,6 +599,11 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                     logger.error("manage_local.sh not found")
                     return
 
+                # Créer flag pour éviter cleanup au prochain démarrage
+                flag_file = Path('/tmp/bot_no_cleanup')
+                flag_file.write_text('update')
+                logger.info("Flag no-cleanup créé")
+
                 # Lancer le script en arrière-plan
                 logger.info("Lancement manage_local.sh update")
                 subprocess.Popen(['bash', str(manage_script), 'update'],
@@ -627,6 +632,11 @@ Session démarrée: {self.session_start_time.strftime('%H:%M:%S')}
                     self.send_telegram("❌ Script manage_local.sh introuvable!\n\nUtilisez le raccourci Bureau.")
                     logger.error("manage_local.sh not found")
                     return
+
+                # Créer flag pour éviter cleanup au prochain démarrage
+                flag_file = Path('/tmp/bot_no_cleanup')
+                flag_file.write_text('restart')
+                logger.info("Flag no-cleanup créé")
 
                 # Lancer le script en arrière-plan
                 logger.info("Lancement manage_local.sh restart")
@@ -2201,6 +2211,48 @@ Erreurs totales: {self.error_count}
         self.send_telegram("".join(message_parts))
         self.last_status_update = current_time
 
+    def restore_positions_from_api(self):
+        """Restaure les positions actives depuis l'API après un restart"""
+        try:
+            logger.info("Restauration positions depuis API...")
+            print("\n🔄 Restauration des positions depuis l'API...")
+
+            # Parcourir toutes les paires volatiles
+            for pair in self.volatile_pairs:
+                real_pos = self.get_real_positions(pair)
+                if real_pos and (real_pos.get('long') or real_pos.get('short')):
+                    # Créer un objet HedgePosition minimal
+                    position = HedgePosition(pair)
+
+                    # Restaurer les infos de position
+                    if real_pos.get('long'):
+                        position.long_open = True
+                        position.entry_price_long = real_pos['long']['entry_price']
+                        logger.info(f"Position LONG restaurée sur {pair}: {position.entry_price_long}")
+
+                    if real_pos.get('short'):
+                        position.short_open = True
+                        position.entry_price_short = real_pos['short']['entry_price']
+                        logger.info(f"Position SHORT restaurée sur {pair}: {position.entry_price_short}")
+
+                    # Ajouter aux positions actives
+                    self.active_positions[pair] = position
+                    print(f"   ✅ {pair.split('/')[0]}: LONG={position.long_open}, SHORT={position.short_open}")
+
+                    # Note: Les ordres (TP, double) ne sont pas restaurés ici
+                    # Ils seront recréés lors du prochain cycle si nécessaire
+
+            if self.active_positions:
+                logger.info(f"{len(self.active_positions)} positions restaurées")
+                print(f"\n✅ {len(self.active_positions)} positions restaurées\n")
+            else:
+                logger.info("Aucune position à restaurer")
+                print("ℹ️  Aucune position active trouvée\n")
+
+        except Exception as e:
+            logger.error(f"Erreur restauration positions: {e}")
+            print(f"⚠️  Erreur restauration: {e}")
+
     def run(self):
         """Boucle principale"""
         print("="*80)
@@ -2229,8 +2281,19 @@ Erreurs totales: {self.error_count}
             print("\n📡 Connexion Bitget Testnet...")
             self.exchange.load_markets()
 
-            # NETTOYER TOUTES LES POSITIONS ET ORDRES EXISTANTS
-            self.cleanup_all_positions_and_orders()
+            # Vérifier si c'est un restart/update (flag no-cleanup)
+            flag_file = Path('/tmp/bot_no_cleanup')
+            is_restart = flag_file.exists()
+
+            if is_restart:
+                reason = flag_file.read_text()
+                logger.info(f"Flag no-cleanup détecté ({reason}) - Conservation des positions")
+                print(f"🔄 Redémarrage ({reason}) - Positions conservées")
+                flag_file.unlink()  # Supprimer le flag
+            else:
+                # NETTOYER TOUTES LES POSITIONS ET ORDRES EXISTANTS
+                logger.info("Démarrage initial - Nettoyage des positions")
+                self.cleanup_all_positions_and_orders()
 
             # Message démarrage
             startup = f"""
@@ -2266,21 +2329,28 @@ Erreurs totales: {self.error_count}
 """
             self.send_telegram(startup)
 
-            # Ouvrir hedge sur UNE SEULE paire pour tester (DOGE)
-            logger.info(f"MODE TEST: Ouverture hedge sur DOGE uniquement")
-            print(f"\n📊 MODE TEST: Ouverture hedge sur DOGE uniquement...")
+            # Ouvrir hedge UNIQUEMENT au premier démarrage (pas après restart/update)
+            if not is_restart:
+                logger.info(f"MODE TEST: Ouverture hedge sur DOGE uniquement")
+                print(f"\n📊 MODE TEST: Ouverture hedge sur DOGE uniquement...")
 
-            # Ouvrir SEULEMENT DOGE
-            test_pair = 'DOGE/USDT:USDT'
-            if test_pair in self.available_pairs:
-                logger.info(f"Ouverture hedge: {test_pair}")
-                success = self.open_hedge_with_limit_orders(test_pair)
-                if success:
-                    logger.info(f"✅ Hedge DOGE ouvert avec succès")
+                # Ouvrir SEULEMENT DOGE
+                test_pair = 'DOGE/USDT:USDT'
+                if test_pair in self.available_pairs:
+                    logger.info(f"Ouverture hedge: {test_pair}")
+                    success = self.open_hedge_with_limit_orders(test_pair)
+                    if success:
+                        logger.info(f"✅ Hedge DOGE ouvert avec succès")
+                    else:
+                        logger.error(f"❌ Échec ouverture hedge DOGE")
                 else:
-                    logger.error(f"❌ Échec ouverture hedge DOGE")
+                    logger.error(f"DOGE/USDT:USDT pas dans les paires disponibles!")
             else:
-                logger.error(f"DOGE/USDT:USDT pas dans les paires disponibles!")
+                logger.info("Restart/Update - Conservation des positions existantes")
+                print("🔄 Positions existantes conservées")
+
+                # Restaurer les positions depuis l'API
+                self.restore_positions_from_api()
 
             # NE PAS ouvrir PEPE ni SHIB (mode test)
             # pairs_to_open = self.available_pairs.copy()
@@ -2371,62 +2441,33 @@ Erreurs totales: {self.error_count}
 
 
 def main():
-    """Fonction principale avec redémarrage automatique en cas d'erreur"""
-    restart_count = 0
-    restart_delay = 5  # Secondes avant redémarrage
-
-    while True:
+    """Fonction principale - manage_local.sh gère les redémarrages"""
+    try:
+        bot = BitgetHedgeBotV2()
+        bot.run()
+    except KeyboardInterrupt:
+        print("\n✋ Arrêt manuel du bot (Ctrl+C)")
         try:
-            if restart_count > 0:
-                print(f"\n🔄 Redémarrage automatique #{restart_count}...")
-                print(f"⏳ Attente de {restart_delay} secondes...\n")
-                time.sleep(restart_delay)
+            bot.send_telegram("🛑 Bot arrêté manuellement (Ctrl+C)")
+        except:
+            pass
+    except SystemExit:
+        # /restart ou /stop appelé - laisser manage_local.sh gérer
+        print("\n🔄 Sortie normale (commande admin)")
+    except Exception as e:
+        # Erreur critique - logger et quitter
+        error_msg = f"❌ ERREUR CRITIQUE: {str(e)[:200]}"
+        print(f"\n{error_msg}")
+        import traceback
+        logger.error(f"Erreur critique:")
+        logger.error(traceback.format_exc())
 
-            bot = BitgetHedgeBotV2()
-            bot.run()
-
-            # Si le bot se termine normalement (ne devrait jamais arriver)
-            break
-
-        except KeyboardInterrupt:
-            print("\n✋ Arrêt manuel du bot (Ctrl+C)")
-            try:
-                bot.send_telegram("🛑 Bot arrêté manuellement (Ctrl+C)")
-            except:
-                pass
-            break
-
-        except Exception as e:
-            restart_count += 1
-            error_msg = f"❌ ERREUR CRITIQUE #{restart_count}: {str(e)[:200]}"
-            print(f"\n{error_msg}")
-            print(f"📊 Traceback complet enregistré dans les logs")
-
-            # Logger l'erreur complète
-            import traceback
-            logger.error(f"Erreur critique #{restart_count}:")
-            logger.error(traceback.format_exc())
-
-            # Notifier via Telegram
-            try:
-                restart_msg = f"""
-⚠️ <b>BOT CRASH - REDÉMARRAGE AUTO</b>
-
-❌ Erreur #{restart_count}: {str(e)[:150]}
-
-🔄 Redémarrage dans {restart_delay}s...
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-                # Créer une instance temporaire juste pour envoyer le message
-                try:
-                    temp_bot = BitgetHedgeBotV2()
-                    temp_bot.send_telegram(restart_msg)
-                except:
-                    pass
-            except:
-                pass
-
-            # Continuer la boucle pour redémarrer
+        try:
+            temp_bot = BitgetHedgeBotV2()
+            temp_bot.send_telegram(f"❌ BOT CRASH\n\n{str(e)[:150]}\n\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+        except:
+            pass
+        raise  # Re-lever l'erreur pour que le process se termine
 
 
 if __name__ == "__main__":
