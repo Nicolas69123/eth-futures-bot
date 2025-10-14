@@ -1607,16 +1607,19 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     logger.info(f"🔄 SHORT Fib: {position.short_fib_level} → {detected}")
                     position.short_fib_level = detected
 
-            # Vérifier ordres manquants
+            # Vérifier ordres manquants avec DEBUG
             missing = []
-            if long_data and not position.orders['tp_long']:
+            if long_data and not position.orders.get('tp_long'):
                 missing.append('tp_long')
-            if long_data and not position.orders['double_long']:
+            if long_data and not position.orders.get('double_long'):
                 missing.append('double_long')
-            if short_data and not position.orders['tp_short']:
+            if short_data and not position.orders.get('tp_short'):
                 missing.append('tp_short')
-            if short_data and not position.orders['double_short']:
+            if short_data and not position.orders.get('double_short'):
                 missing.append('double_short')
+
+            # DEBUG: Afficher état ordres
+            logger.info(f"[RATTRAPAGE] Ordres actuels: TP_L={position.orders.get('tp_long')}, TP_S={position.orders.get('tp_short')}, DL={position.orders.get('double_long')}, DS={position.orders.get('double_short')}")
 
             # Replacer si manquants
             if missing:
@@ -1624,13 +1627,17 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 print(f"🔧 RATTRAPAGE {pair}: {missing}")
 
                 if 'tp_long' in missing or 'double_long' in missing:
+                    logger.info(f"Replacement ordres LONG...")
                     self.place_orders_for_long(pair, position, long_data)
 
                 if 'tp_short' in missing or 'double_short' in missing:
+                    logger.info(f"Replacement ordres SHORT...")
                     self.place_orders_for_short(pair, position, short_data)
 
         except Exception as e:
             logger.error(f"Erreur verify_and_fix: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def check_orders_status(self, iteration=0):
         """Vérifie l'état des ordres (LIMIT + TP/SL plan)
@@ -1643,8 +1650,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
         for pair, position in list(self.active_positions.items()):
             try:
-                # RATTRAPAGE: Vérifier et replacer ordres manquants (toutes les 5s)
-                if iteration % 5 == 0:
+                # RATTRAPAGE: Vérifier et replacer ordres manquants (toutes les 2s pour vitesse)
+                if iteration % 2 == 0:
                     self.verify_and_fix_missing_orders(pair, position)
                 # INTERROGER API pour obtenir état actuel
                 real_pos = self.get_real_positions(pair)
