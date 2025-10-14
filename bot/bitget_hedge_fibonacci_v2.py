@@ -1604,6 +1604,16 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 if not tp_short_price:
                     tp_short_price = current_entry_short * 0.997  # Fallback -0.3%
 
+                # 2b. Validation: Vérifier distance minimale TP SHORT
+                current_price = self.get_price(pair)
+                if current_price and tp_short_price:
+                    distance_pct = abs((tp_short_price - current_price) / current_price) * 100
+                    if distance_pct < 0.2:
+                        logger.warning(f"TP Short doublé trop proche ({distance_pct:.2f}%) - Skip")
+                        print(f"⚠️  TP Short trop proche ({distance_pct:.2f}%) - Non placé")
+                        # Ne pas placer le TP mais continuer (placer double short quand même)
+                        tp_short_price = None
+
                 # 3. Placer ordre DOUBLER SHORT
                 try:
                     double_order = self.exchange.create_order(
@@ -1619,21 +1629,25 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     logger.error(f"Erreur Doubler Short: {e}")
                     print(f"❌ Erreur Doubler Short: {e}")
 
-                # 4. Placer TP SHORT
-                try:
-                    tp_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='buy', amount=current_size_short,
-                        price=tp_short_price, params={'tradeSide': 'close', 'holdSide': 'short'}
-                    )
-                    verified = self.verify_order_placed(tp_order['id'], pair)
-                    if verified:
-                        position.orders['tp_short'] = tp_order['id']
-                        profit_pct = ((current_entry_short - tp_short_price) / current_entry_short) * 100
-                        logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)}")
-                        print(f"✅ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} ({profit_pct:+.2f}%)")
-                except Exception as e:
-                    logger.error(f"Erreur TP Short: {e}")
-                    print(f"❌ Erreur TP Short: {e}")
+                # 4. Placer TP SHORT (seulement si pas trop proche)
+                if tp_short_price:
+                    try:
+                        tp_order = self.exchange.create_order(
+                            symbol=pair, type='limit', side='buy', amount=current_size_short,
+                            price=tp_short_price, params={'tradeSide': 'close', 'holdSide': 'short'}
+                        )
+                        verified = self.verify_order_placed(tp_order['id'], pair)
+                        if verified:
+                            position.orders['tp_short'] = tp_order['id']
+                            profit_pct = ((current_entry_short - tp_short_price) / current_entry_short) * 100
+                            logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)}")
+                            print(f"✅ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} ({profit_pct:+.2f}%)")
+                    except Exception as e:
+                        logger.error(f"Erreur TP Short: {e}")
+                        print(f"❌ Erreur TP Short: {e}")
+                else:
+                    logger.info("TP Short skippé (trop proche du prix actuel)")
+                    print("⏭️  TP Short non placé (trop proche)")
 
             # ORDRES POUR LE NOUVEAU LONG (réouvert au niveau Fib 0)
             long_data = real_pos.get('long')
@@ -1647,7 +1661,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 # Validation: Vérifier distance minimale
                 current_price = self.get_price(pair)
-                if current_price:
+                if current_price and tp_long_price:
                     distance_pct = abs((tp_long_price - current_price) / current_price) * 100
                     if distance_pct < 0.2:
                         logger.warning(f"TP Long trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
@@ -1707,6 +1721,16 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 if not tp_long_price:
                     tp_long_price = current_entry_long * 1.003  # Fallback +0.3%
 
+                # 2b. Validation: Vérifier distance minimale TP LONG
+                current_price = self.get_price(pair)
+                if current_price and tp_long_price:
+                    distance_pct = abs((tp_long_price - current_price) / current_price) * 100
+                    if distance_pct < 0.2:
+                        logger.warning(f"TP Long doublé trop proche ({distance_pct:.2f}%) - Skip")
+                        print(f"⚠️  TP Long trop proche ({distance_pct:.2f}%) - Non placé")
+                        # Ne pas placer le TP mais continuer (placer double long quand même)
+                        tp_long_price = None
+
                 # 3. Placer ordre DOUBLER LONG
                 try:
                     double_order = self.exchange.create_order(
@@ -1722,21 +1746,25 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     logger.error(f"Erreur Doubler Long: {e}")
                     print(f"❌ Erreur Doubler Long: {e}")
 
-                # 4. Placer TP LONG
-                try:
-                    tp_order = self.exchange.create_order(
-                        symbol=pair, type='limit', side='sell', amount=current_size_long,
-                        price=tp_long_price, params={'tradeSide': 'close', 'holdSide': 'long'}
-                    )
-                    verified = self.verify_order_placed(tp_order['id'], pair)
-                    if verified:
-                        position.orders['tp_long'] = tp_order['id']
-                        profit_pct = ((tp_long_price - current_entry_long) / current_entry_long) * 100
-                        logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)}")
-                        print(f"✅ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} ({profit_pct:+.2f}%)")
-                except Exception as e:
-                    logger.error(f"Erreur TP Long: {e}")
-                    print(f"❌ Erreur TP Long: {e}")
+                # 4. Placer TP LONG (seulement si pas trop proche)
+                if tp_long_price:
+                    try:
+                        tp_order = self.exchange.create_order(
+                            symbol=pair, type='limit', side='sell', amount=current_size_long,
+                            price=tp_long_price, params={'tradeSide': 'close', 'holdSide': 'long'}
+                        )
+                        verified = self.verify_order_placed(tp_order['id'], pair)
+                        if verified:
+                            position.orders['tp_long'] = tp_order['id']
+                            profit_pct = ((tp_long_price - current_entry_long) / current_entry_long) * 100
+                            logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)}")
+                            print(f"✅ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} ({profit_pct:+.2f}%)")
+                    except Exception as e:
+                        logger.error(f"Erreur TP Long: {e}")
+                        print(f"❌ Erreur TP Long: {e}")
+                else:
+                    logger.info("TP Long skippé (trop proche du prix actuel)")
+                    print("⏭️  TP Long non placé (trop proche)")
 
             # ORDRES POUR LE NOUVEAU SHORT (réouvert au niveau Fib 0)
             short_data = real_pos.get('short')
@@ -1750,7 +1778,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
                 # Validation: Vérifier distance minimale
                 current_price = self.get_price(pair)
-                if current_price:
+                if current_price and tp_short_price:
                     distance_pct = abs((tp_short_price - current_price) / current_price) * 100
                     if distance_pct < 0.2:
                         logger.warning(f"TP Short trop proche du prix actuel ({distance_pct:.2f}%) - Skip")
