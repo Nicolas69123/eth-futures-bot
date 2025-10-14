@@ -228,9 +228,9 @@ class BitgetHedgeBotV2:
                 real_pos = self.get_real_positions(pair)
                 if real_pos:
                     if real_pos.get('long'):
-                        total_unrealized += real_pos['long']['unrealized_pnl']
+                        total_unrealized += real_pos['long']['unrealized_pnl'] or 0
                     if real_pos.get('short'):
-                        total_unrealized += real_pos['short']['unrealized_pnl']
+                        total_unrealized += real_pos['short']['unrealized_pnl'] or 0
 
             # Récupérer les VRAIS frais depuis l'API
             total_fees = self.get_total_fees()
@@ -728,10 +728,10 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                         'size': float(pos['contracts']),
                         'entry_price': float(pos['entryPrice']),
                         'mark_price': float(pos['markPrice']),
-                        'liquidation_price': float(pos.get('liquidationPrice', 0)),
-                        'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
-                        'pnl_percentage': float(pos.get('percentage', 0)),
-                        'margin': float(pos.get('initialMargin', 0)),
+                        'liquidation_price': float(pos.get('liquidationPrice') or 0),
+                        'unrealized_pnl': float(pos.get('unrealizedPnl') or 0),
+                        'pnl_percentage': float(pos.get('percentage') or 0),
+                        'margin': float(pos.get('initialMargin') or 0),
                     }
 
             return result
@@ -2139,7 +2139,7 @@ Erreurs totales: {self.error_count}
 
             # LONG (si ouvert)
             if long_data:
-                pnl = long_data['unrealized_pnl']
+                pnl = long_data['unrealized_pnl'] or 0
                 total_pnl += pnl
                 entry_long = long_data['entry_price']
 
@@ -2159,7 +2159,7 @@ Erreurs totales: {self.error_count}
 
             # SHORT (si ouvert)
             if short_data:
-                pnl = short_data['unrealized_pnl']
+                pnl = short_data['unrealized_pnl'] or 0
                 total_pnl += pnl
                 entry_short = short_data['entry_price']
 
@@ -2361,14 +2361,72 @@ Erreurs totales: {self.error_count}
         except KeyboardInterrupt:
             print("\n✋ Arrêt")
             self.send_telegram("🛑 Bot arrêté")
+            raise  # Propager pour que main() sache que c'est un arrêt manuel
         except Exception as e:
-            print(f"❌ Erreur: {e}")
-            self.send_telegram(f"❌ Erreur: {e}")
+            print(f"❌ Erreur dans run(): {e}")
+            import traceback
+            logger.error(f"Exception dans run(): {traceback.format_exc()}")
+            self.send_telegram(f"❌ Erreur détectée: {str(e)[:150]}")
+            raise  # Propager l'erreur vers main() pour redémarrage auto
 
 
 def main():
-    bot = BitgetHedgeBotV2()
-    bot.run()
+    """Fonction principale avec redémarrage automatique en cas d'erreur"""
+    restart_count = 0
+    restart_delay = 5  # Secondes avant redémarrage
+
+    while True:
+        try:
+            if restart_count > 0:
+                print(f"\n🔄 Redémarrage automatique #{restart_count}...")
+                print(f"⏳ Attente de {restart_delay} secondes...\n")
+                time.sleep(restart_delay)
+
+            bot = BitgetHedgeBotV2()
+            bot.run()
+
+            # Si le bot se termine normalement (ne devrait jamais arriver)
+            break
+
+        except KeyboardInterrupt:
+            print("\n✋ Arrêt manuel du bot (Ctrl+C)")
+            try:
+                bot.send_telegram("🛑 Bot arrêté manuellement (Ctrl+C)")
+            except:
+                pass
+            break
+
+        except Exception as e:
+            restart_count += 1
+            error_msg = f"❌ ERREUR CRITIQUE #{restart_count}: {str(e)[:200]}"
+            print(f"\n{error_msg}")
+            print(f"📊 Traceback complet enregistré dans les logs")
+
+            # Logger l'erreur complète
+            import traceback
+            logger.error(f"Erreur critique #{restart_count}:")
+            logger.error(traceback.format_exc())
+
+            # Notifier via Telegram
+            try:
+                restart_msg = f"""
+⚠️ <b>BOT CRASH - REDÉMARRAGE AUTO</b>
+
+❌ Erreur #{restart_count}: {str(e)[:150]}
+
+🔄 Redémarrage dans {restart_delay}s...
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+                # Créer une instance temporaire juste pour envoyer le message
+                try:
+                    temp_bot = BitgetHedgeBotV2()
+                    temp_bot.send_telegram(restart_msg)
+                except:
+                    pass
+            except:
+                pass
+
+            # Continuer la boucle pour redémarrer
 
 
 if __name__ == "__main__":
