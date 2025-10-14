@@ -1583,8 +1583,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
     def verify_and_fix_missing_orders(self, pair, position):
         """
-        RATTRAPAGE COMPLET: Vérifie ordres manquants et les replace
-        Détecte niveau Fib depuis marge, replace ordres si manquants
+        RATTRAPAGE COMPLET: Vérifie ordres RÉELS sur API Bitget
+        Compare avec mémoire, replace si manquants ou invalides
         """
         try:
             real_pos = self.get_real_positions(pair)
@@ -1607,23 +1607,51 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     logger.info(f"🔄 SHORT Fib: {position.short_fib_level} → {detected}")
                     position.short_fib_level = detected
 
-            # Vérifier ordres manquants avec DEBUG
-            missing = []
-            if long_data and not position.orders.get('tp_long'):
-                missing.append('tp_long')
-            if long_data and not position.orders.get('double_long'):
-                missing.append('double_long')
-            if short_data and not position.orders.get('tp_short'):
-                missing.append('tp_short')
-            if short_data and not position.orders.get('double_short'):
-                missing.append('double_short')
+            # VÉRIFIER ORDRES RÉELS SUR L'API BITGET (pas juste mémoire)
+            try:
+                # Ordres LIMIT (Double Long/Short)
+                limit_orders = self.exchange.fetch_open_orders(symbol=pair)
+                limit_order_ids = [o['id'] for o in limit_orders]
 
-            # DEBUG: Afficher état ordres
-            logger.info(f"[RATTRAPAGE] Ordres actuels: TP_L={position.orders.get('tp_long')}, TP_S={position.orders.get('tp_short')}, DL={position.orders.get('double_long')}, DS={position.orders.get('double_short')}")
+                # Ordres TP/SL plan
+                tpsl_orders = self.get_tpsl_orders(pair)
+                tpsl_order_ids = [o.get('planId') or o.get('orderId') for o in tpsl_orders] if tpsl_orders else []
+
+            except Exception as e:
+                logger.error(f"Erreur récupération ordres API: {e}")
+                return
+
+            # Vérifier chaque ordre stocké vs API réelle
+            missing = []
+
+            if long_data:
+                tp_long_id = position.orders.get('tp_long')
+                if not tp_long_id or tp_long_id not in tpsl_order_ids:
+                    missing.append('tp_long')
+                    position.orders['tp_long'] = None  # Reset mémoire
+
+                double_long_id = position.orders.get('double_long')
+                if not double_long_id or double_long_id not in limit_order_ids:
+                    missing.append('double_long')
+                    position.orders['double_long'] = None  # Reset mémoire
+
+            if short_data:
+                tp_short_id = position.orders.get('tp_short')
+                if not tp_short_id or tp_short_id not in tpsl_order_ids:
+                    missing.append('tp_short')
+                    position.orders['tp_short'] = None  # Reset mémoire
+
+                double_short_id = position.orders.get('double_short')
+                if not double_short_id or double_short_id not in limit_order_ids:
+                    missing.append('double_short')
+                    position.orders['double_short'] = None  # Reset mémoire
+
+            # DEBUG: Afficher état
+            logger.info(f"[RATTRAPAGE] Ordres API réels: LIMIT={len(limit_order_ids)}, TPSL={len(tpsl_order_ids)}")
 
             # Replacer si manquants
             if missing:
-                logger.warning(f"⚠️ {pair}: {len(missing)} ordres manquants: {missing}")
+                logger.warning(f"⚠️ {pair}: {len(missing)} ordres manquants/invalides: {missing}")
                 print(f"🔧 RATTRAPAGE {pair}: {missing}")
 
                 if 'tp_long' in missing or 'double_long' in missing:
