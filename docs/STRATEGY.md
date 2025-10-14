@@ -1,7 +1,7 @@
 # 📊 STRATÉGIE FIBONACCI HEDGE
 
-**Version:** 2.2
-**Règle d'or:** TP et Double au MÊME niveau | Chaque position a SON niveau Fibonacci
+**Version:** 2.3
+**Règle d'or:** TP TOUJOURS 0.3% fixe | Double suit Fibonacci | Chaque position a SON niveau
 
 ---
 
@@ -60,8 +60,8 @@ Short: 750 contrats @ prix_moyen (Fib 1 SHORT)
 2. Annuler ordre Double Long
 3. Ré-ouvrir Long 250 contrats MARKET (Fib 0)
 4. **INTERROGER API: prix_moyen_short, size_short_total**
-5. Placer TP Long @ +0.3% (250 contrats, Fib 1)
-6. Placer TP Short @ prix_moyen_short -0.382% (**750 contrats = INTÉGRALITÉ**, Fib 2)
+5. Placer TP Long @ +0.3% FIXE (250 contrats)
+6. Placer TP Short @ prix_moyen_short -0.3% FIXE (**750 contrats = INTÉGRALITÉ**)
 7. Placer Double Long @ -0.3% (500 contrats, Fib 1 LONG)
 8. Placer Double Short @ prix_moyen_short +0.382% (1500 contrats, Fib 2 SHORT)
 
@@ -88,8 +88,8 @@ Short: 2250 contrats @ prix_moyen (Fib 2 SHORT)
 2. Annuler ordre Double Long
 3. Ré-ouvrir Long 250 contrats MARKET (Fib 0)
 4. **INTERROGER API: prix_moyen_short, size_short_total**
-5. Placer TP Long @ +0.3% (250 contrats, Fib 1)
-6. Placer TP Short @ prix_moyen_short -0.5% (**2250 contrats = INTÉGRALITÉ**, Fib 3)
+5. Placer TP Long @ +0.3% FIXE (250 contrats)
+6. Placer TP Short @ prix_moyen_short -0.3% FIXE (**2250 contrats = INTÉGRALITÉ**)
 7. Placer Double Long @ -0.3% (500 contrats, Fib 1)
 8. Placer Double Short @ prix_moyen_short +0.5% (4500 contrats, Fib 3 SHORT)
 
@@ -116,8 +116,8 @@ Short: 6750 contrats @ prix_moyen (Fib 3 SHORT)
 2. Annuler ordre Double Long
 3. Ré-ouvrir Long 250 contrats MARKET (Fib 0)
 4. **INTERROGER API: prix_moyen_short, size_short_total**
-5. Placer TP Long @ +0.3% (250 contrats, Fib 1)
-6. Placer TP Short @ prix_moyen_short -0.618% (**6750 contrats = INTÉGRALITÉ**, Fib 4)
+5. Placer TP Long @ +0.3% FIXE (250 contrats)
+6. Placer TP Short @ prix_moyen_short -0.3% FIXE (**6750 contrats = INTÉGRALITÉ**)
 7. Placer Double Long @ -0.3% (500 contrats, Fib 1)
 8. Placer Double Short @ prix_moyen_short +0.618% (13500 contrats, Fib 4 SHORT)
 
@@ -144,8 +144,8 @@ Short: 6750 contrats @ prix_moyen (Fib 3 SHORT)
 2. Annuler ordre Double Short
 3. Ré-ouvrir Short 250 MARKET (Fib 0)
 4. **INTERROGER API: prix_moyen_long, size_long_total**
-5. Placer TP Short @ -0.3% (250 contrats, Fib 1)
-6. Placer TP Long @ prix_moyen_long +0.382% (**750 contrats = INTÉGRALITÉ**, Fib 2)
+5. Placer TP Short @ -0.3% FIXE (250 contrats)
+6. Placer TP Long @ prix_moyen_long +0.3% FIXE (**750 contrats = INTÉGRALITÉ**)
 7. Placer Double Short @ +0.3% (500 contrats, Fib 1 SHORT)
 8. Placer Double Long @ prix_moyen_long -0.382% (1500 contrats, Fib 2 LONG)
 
@@ -156,27 +156,36 @@ Short: 6750 contrats @ prix_moyen (Fib 3 SHORT)
 ## 🎯 RÈGLES CRITIQUES
 
 1. **Fib 0 = Prix MARKET** (ouverture/réouverture)
-2. **TP et Double = MÊME niveau Fibonacci** (se déclenchent ensemble)
-3. **2 niveaux séparés:** `long_fib_level` et `short_fib_level` indépendants
-4. **TP ferme TOUT:** Toujours placer TP avec `size_total` (100% position)
-5. **INTERROGER API:** Après chaque doublement, récupérer `prix_moyen` et `size_total`
-6. **Délais:** 500ms annulation, 1s ordre LIMIT, 2s ordre MARKET
-7. **Position réouverte = toujours Fib 0** (retour au début)
-8. **Position doublée = niveau suivant** (Fib 0→1→2→3...)
+2. **TP TOUJOURS 0.3% FIXE** (peu importe niveau Fibonacci)
+3. **Double suit Fibonacci** (0.3%, 0.382%, 0.5%, 0.618%, 1.0%, etc.)
+4. **2 niveaux séparés:** `long_fib_level` et `short_fib_level` indépendants
+5. **TP ferme TOUT:** Toujours placer TP avec `size_total` (100% position)
+6. **INTERROGER API:** Après chaque doublement, récupérer `prix_moyen` et `size_total`
+7. **Délais:** 500ms annulation, 1s ordre LIMIT, 2s ordre MARKET
+8. **Position réouverte = toujours Fib 0** (retour au début)
+9. **Position doublée = niveau suivant** (Fib 0→1→2→3...)
+10. **Déséquilibre NORMAL** (pas d'alerte si L:250 S:6750)
 
 ---
 
 ## 📊 CALCUL DISTANCES
 
-**Pour une position à Fib X qui doit placer ordres à Fib X+1 :**
+**Pour placer ordres après un doublement :**
 
 ```python
-distance_pct = FIBONACCI_LEVELS[fib_level + 1]  # Ex: Fib 1 = 0.3%
-prix_double_long = entry_price * (1 - distance_pct / 100)
-prix_tp_long = entry_price * (1 + distance_pct / 100)
+# Exemple: Short à Fib 1, doit placer ordres pour Fib 2
+
+TP_FIXE = 0.3  # Constant !
+prix_tp_short = entry_short_moyen * (1 - TP_FIXE / 100)  # -0.3% FIXE
+
+next_fib_pct = FIBONACCI_LEVELS[2]  # Fib 2 = 0.382%
+prix_double_short = entry_short_moyen * (1 + next_fib_pct / 100)  # +0.382% Fib
 ```
 
-**TOUJOURS depuis le prix_moyen de la position !**
+**IMPORTANT:**
+- TP = 0.3% fixe depuis prix_moyen
+- Double = Niveau Fibonacci suivant depuis prix_moyen
+- TP et Double NE SONT PAS au même prix !
 
 ---
 
