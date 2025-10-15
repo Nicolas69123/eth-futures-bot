@@ -2393,19 +2393,27 @@ Erreurs totales: {self.error_count}
             for pair in self.volatile_pairs:
                 real_pos = self.get_real_positions(pair)
                 if real_pos and (real_pos.get('long') or real_pos.get('short')):
-                    # Créer un objet HedgePosition minimal
-                    position = HedgePosition(pair)
+                    # Extraire prix d'entrée
+                    entry_long = real_pos['long']['entry_price'] if real_pos.get('long') else 0
+                    entry_short = real_pos['short']['entry_price'] if real_pos.get('short') else 0
 
-                    # Restaurer les infos de position
+                    # Créer HedgePosition avec bons paramètres
+                    position = HedgePosition(pair, self.INITIAL_MARGIN, entry_long, entry_short)
+
+                    # Restaurer états et tailles
                     if real_pos.get('long'):
                         position.long_open = True
-                        position.entry_price_long = real_pos['long']['entry_price']
-                        logger.info(f"Position LONG restaurée sur {pair}: {position.entry_price_long}")
+                        position.long_size_previous = real_pos['long']['size']
+                        logger.info(f"LONG restauré: {position.long_size_previous:.0f} contrats @ ${entry_long:.5f}")
+                    else:
+                        position.long_open = False
 
                     if real_pos.get('short'):
                         position.short_open = True
-                        position.entry_price_short = real_pos['short']['entry_price']
-                        logger.info(f"Position SHORT restaurée sur {pair}: {position.entry_price_short}")
+                        position.short_size_previous = real_pos['short']['size']
+                        logger.info(f"SHORT restauré: {position.short_size_previous:.0f} contrats @ ${entry_short:.5f}")
+                    else:
+                        position.short_open = False
 
                     # Ajouter aux positions actives
                     self.active_positions[pair] = position
@@ -2453,24 +2461,10 @@ Erreurs totales: {self.error_count}
             print("\n📡 Connexion Bitget Testnet...")
             self.exchange.load_markets()
 
-            # Vérifier s'il y a des positions actives (restart/update) ou non (premier démarrage)
-            has_active_positions = False
-            try:
-                for pair in self.volatile_pairs:
-                    real_pos = self.get_real_positions(pair)
-                    if real_pos and (real_pos.get('long') or real_pos.get('short')):
-                        has_active_positions = True
-                        break
-            except:
-                pass
-
-            if has_active_positions:
-                logger.info("Positions actives détectées - Redémarrage (skip cleanup)")
-                print(f"🔄 Redémarrage - Positions conservées")
-            else:
-                # NETTOYER TOUTES LES POSITIONS ET ORDRES EXISTANTS
-                logger.info("Aucune position active - Premier démarrage (cleanup)")
-                self.cleanup_all_positions_and_orders()
+            # TOUJOURS NETTOYER au démarrage (session propre)
+            logger.info("Nettoyage complet au démarrage")
+            print("\n🧹 Nettoyage de toutes les positions et ordres...")
+            self.cleanup_all_positions_and_orders()
 
             # Message démarrage
             startup = f"""
@@ -2506,28 +2500,20 @@ Erreurs totales: {self.error_count}
 """
             self.send_telegram(startup)
 
-            # Ouvrir hedge UNIQUEMENT au premier démarrage (pas après restart/update)
-            if not has_active_positions:
-                logger.info(f"MODE TEST: Ouverture hedge sur DOGE uniquement")
-                print(f"\n📊 MODE TEST: Ouverture hedge sur DOGE uniquement...")
+            # Ouvrir hedge sur DOGE (session propre)
+            logger.info(f"Ouverture hedge DOGE")
+            print(f"\n📊 Ouverture hedge DOGE...")
 
-                # Ouvrir SEULEMENT DOGE
-                test_pair = 'DOGE/USDT:USDT'
-                if test_pair in self.available_pairs:
-                    logger.info(f"Ouverture hedge: {test_pair}")
-                    success = self.open_hedge_with_limit_orders(test_pair)
-                    if success:
-                        logger.info(f"✅ Hedge DOGE ouvert avec succès")
-                    else:
-                        logger.error(f"❌ Échec ouverture hedge DOGE")
+            test_pair = 'DOGE/USDT:USDT'
+            if test_pair in self.available_pairs:
+                success = self.open_hedge_with_limit_orders(test_pair)
+                if success:
+                    logger.info(f"✅ Hedge DOGE ouvert")
+                    print(f"✅ Hedge DOGE ouvert avec succès")
                 else:
-                    logger.error(f"DOGE/USDT:USDT pas dans les paires disponibles!")
+                    logger.error(f"❌ Échec ouverture hedge DOGE")
             else:
-                logger.info("Restart/Update - Conservation des positions existantes")
-                print("🔄 Positions existantes conservées")
-
-                # Restaurer les positions depuis l'API
-                self.restore_positions_from_api()
+                logger.error(f"DOGE/USDT:USDT pas disponible!")
 
             # NE PAS ouvrir PEPE ni SHIB (mode test)
             # pairs_to_open = self.available_pairs.copy()
@@ -2575,7 +2561,7 @@ Erreurs totales: {self.error_count}
                                 print(f"      Distance trigger: {(next_trigger - change_pct):.4f}%")
 
                         # Short (si ouvert)
-                        if position.short_open:
+                        if position.short_open and position.entry_price_short > 0:
                             entry_short = position.entry_price_short
                             change_pct = ((current_price - entry_short) / entry_short) * 100
                             next_trigger = position.get_next_short_trigger_pct()
