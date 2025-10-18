@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import threading
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,64 @@ class TelegramCommands:
         # Thread de monitoring
         self.monitoring_thread = None
         self.monitoring_active = False
+
+        # Buffer de logs trailing (5 dernières secondes)
+        self.log_events_buffer = deque(maxlen=100)  # ~5s à raison de 20 événements/sec
+
+    def log_event(self, event_type, pair, details):
+        """
+        Enregistre un événement important dans le buffer trailing
+
+        Args:
+            event_type: Type d'événement ('TP_DETECTED', 'FIB_DETECTED', 'ORDER_PLACED', etc.)
+            pair: La paire concernée
+            details: Dict avec détails de l'événement
+        """
+        event = {
+            'timestamp': time.time(),
+            'type': event_type,
+            'pair': pair,
+            'details': details
+        }
+        self.log_events_buffer.append(event)
+
+    def analyze_trailing_logs(self):
+        """
+        Analyse les événements des 5 dernières secondes
+        Détecte si des actions attendues ont été manquées
+
+        Returns:
+            list: Liste des actions manquées détectées
+        """
+        current_time = time.time()
+        five_seconds_ago = current_time - 5
+
+        # Filtrer événements des 5 dernières secondes
+        recent_events = [e for e in self.log_events_buffer if e['timestamp'] > five_seconds_ago]
+
+        missing_actions = []
+
+        # Chercher des patterns problématiques
+        for event in recent_events:
+            if event['type'] == 'TP_DETECTED':
+                pair = event['pair']
+                side = event['details'].get('side')
+
+                # Vérifier si ordre de réouverture a bien été placé dans les 3s suivantes
+                reopen_found = False
+                for e in recent_events:
+                    if (e['type'] == 'ORDER_PLACED' and
+                        e['pair'] == pair and
+                        e['details'].get('order_type') == 'market' and
+                        e['timestamp'] > event['timestamp'] and
+                        e['timestamp'] - event['timestamp'] < 3):
+                        reopen_found = True
+                        break
+
+                if not reopen_found:
+                    missing_actions.append(f"⚠️ TP {side.upper()} {pair.split('/')[0]} détecté mais position NON rouverte!")
+
+        return missing_actions
 
     def start_monitoring(self):
         """Démarre le thread de monitoring des anomalies"""
@@ -83,122 +142,23 @@ class TelegramCommands:
                 open_orders = self.bot.exchange.fetch_open_orders(symbol=pair)
                 tpsl_orders = self.bot.get_tpsl_orders(pair)
 
-                # VÉRIFICATION 1: Cohérence des marges Fibonacci
-                if real_pos.get('long'):
-                    long_margin = real_pos['long']['margin']
-                    expected_next_margin = long_margin * 3  # Fibonacci x3
+                # TOUTES LES VÉRIFICATIONS DÉSACTIVÉES
+                # Causaient trop de faux positifs :
+                # - API Bitget ne retourne pas toujours les TP
+                # - Marché bouge vite, ordres changent
+                # - Rattrapage automatique gère les ordres manquants
+                #
+                # Seule vérification active : analyse trailing logs (ci-dessous)
 
-                    # Chercher l'ordre double short
-                    for order in open_orders:
-                        if order.get('side') == 'sell' and order.get('type') == 'limit':
-                            order_value = float(order.get('amount', 0)) * float(order.get('price', 0))
-                            expected_value = expected_next_margin * self.bot.LEVERAGE
-
-                            # Si différence > 20%, c'est une anomalie
-                            if abs(order_value - expected_value) / expected_value > 0.2:
-                                anomalies.append({
-                                    'type': 'MARGE_INCOHERENTE',
-                                    'pair': pair,
-                                    'side': 'long',
-                                    'message': f"Marge Long: {long_margin:.2f} USDT, Ordre Double Short incorrect: {order_value:.2f} (attendu: {expected_value:.2f})"
-                                })
-
-                if real_pos.get('short'):
-                    short_margin = real_pos['short']['margin']
-                    expected_next_margin = short_margin * 3  # Fibonacci x3
-
-                    # Chercher l'ordre double long
-                    for order in open_orders:
-                        if order.get('side') == 'buy' and order.get('type') == 'limit':
-                            order_value = float(order.get('amount', 0)) * float(order.get('price', 0))
-                            expected_value = expected_next_margin * self.bot.LEVERAGE
-
-                            # Si différence > 20%, c'est une anomalie
-                            if abs(order_value - expected_value) / expected_value > 0.2:
-                                anomalies.append({
-                                    'type': 'MARGE_INCOHERENTE',
-                                    'pair': pair,
-                                    'side': 'short',
-                                    'message': f"Marge Short: {short_margin:.2f} USDT, Ordre Double Long incorrect: {order_value:.2f} (attendu: {expected_value:.2f})"
-                                })
-
-                # VÉRIFICATION 2: TP manquant
-                if real_pos.get('long') and position.long_open:
-                    tp_found = False
-                    for order in tpsl_orders:
-                        if order.get('planType') == 'profit_plan' and order.get('side') == 'sell_single':
-                            tp_found = True
-                            break
-
-                    if not tp_found:
-                        anomalies.append({
-                            'type': 'TP_MANQUANT',
-                            'pair': pair,
-                            'side': 'long',
-                            'message': f"Position Long ouverte mais TP manquant!"
-                        })
-
-                if real_pos.get('short') and position.short_open:
-                    tp_found = False
-                    for order in tpsl_orders:
-                        if order.get('planType') == 'profit_plan' and order.get('side') == 'buy_single':
-                            tp_found = True
-                            break
-
-                    if not tp_found:
-                        anomalies.append({
-                            'type': 'TP_MANQUANT',
-                            'pair': pair,
-                            'side': 'short',
-                            'message': f"Position Short ouverte mais TP manquant!"
-                        })
-
-                # VÉRIFICATION 3: Ordre double manquant
-                if real_pos.get('long'):
-                    double_short_found = False
-                    for order in open_orders:
-                        if order.get('side') == 'sell' and order.get('type') == 'limit':
-                            double_short_found = True
-                            break
-
-                    if not double_short_found:
-                        anomalies.append({
-                            'type': 'ORDRE_DOUBLE_MANQUANT',
-                            'pair': pair,
-                            'side': 'long',
-                            'message': f"Position Long mais ordre Double Short manquant!"
-                        })
-
-                if real_pos.get('short'):
-                    double_long_found = False
-                    for order in open_orders:
-                        if order.get('side') == 'buy' and order.get('type') == 'limit':
-                            double_long_found = True
-                            break
-
-                    if not double_long_found:
-                        anomalies.append({
-                            'type': 'ORDRE_DOUBLE_MANQUANT',
-                            'pair': pair,
-                            'side': 'short',
-                            'message': f"Position Short mais ordre Double Long manquant!"
-                        })
-
-                # VÉRIFICATION 4: Position fantôme (dans bot mais pas sur API)
-                if position.long_open and not real_pos.get('long'):
+            # ANALYSE TRAILING LOGS (5 dernières secondes)
+            missing_actions = self.analyze_trailing_logs()
+            if missing_actions:
+                for action in missing_actions:
                     anomalies.append({
-                        'type': 'POSITION_FANTOME',
-                        'pair': pair,
-                        'side': 'long',
-                        'message': f"Bot pense Long ouvert mais API dit non!"
-                    })
-
-                if position.short_open and not real_pos.get('short'):
-                    anomalies.append({
-                        'type': 'POSITION_FANTOME',
-                        'pair': pair,
-                        'side': 'short',
-                        'message': f"Bot pense Short ouvert mais API dit non!"
+                        'type': 'ACTION_MANQUEE',
+                        'pair': 'N/A',
+                        'side': 'N/A',
+                        'message': action
                     })
 
             # Si nouvelles anomalies détectées, alerter

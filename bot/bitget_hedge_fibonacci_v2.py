@@ -80,6 +80,10 @@ class HedgePosition:
         self.long_size_previous = 0   # Sera mis à jour après API
         self.short_size_previous = 0  # Sera mis à jour après API
 
+        # Tracking marges pour détecter les TP (marge diminue = TP touché)
+        self.long_margin_previous = 0   # Sera mis à jour après API
+        self.short_margin_previous = 0  # Sera mis à jour après API
+
         # IDs des ordres actifs
         self.orders = {
             'tp_long': None,      # Take profit long
@@ -2160,31 +2164,73 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 long_size_now = real_pos['long']['size'] if long_exists_now else 0
                 short_size_now = real_pos['short']['size'] if short_exists_now else 0
 
-                # DÉTECTION ÉVÉNEMENT 1: TP Long exécuté (Long disparu + vérification TP)
-                if position.long_open and not long_exists_now:
-                    # Double vérification : position disparue ET TP vraiment exécuté
-                    if self.check_if_tp_was_executed(pair, 'long'):
-                        logger.info(f"✅ TP Long confirmé par double vérification")
-                        self.handle_tp_long_executed(pair, position)
-                        position.long_open = False
-                        continue
-                    else:
-                        logger.warning(f"⚠️ Position Long fermée mais PAS par TP - Ignorer")
-                        position.long_open = False
-                        # Ne pas appeler handle_tp_long_executed si ce n'est pas un TP
+                # Marges actuelles
+                long_margin_now = real_pos['long']['margin'] if long_exists_now else 0
+                short_margin_now = real_pos['short']['margin'] if short_exists_now else 0
 
-                # DÉTECTION ÉVÉNEMENT 2: TP Short exécuté (Short disparu + vérification TP)
-                if position.short_open and not short_exists_now:
-                    # Double vérification : position disparue ET TP vraiment exécuté
-                    if self.check_if_tp_was_executed(pair, 'short'):
-                        logger.info(f"✅ TP Short confirmé par double vérification")
-                        self.handle_tp_short_executed(pair, position)
-                        position.short_open = False
-                        continue
-                    else:
-                        logger.warning(f"⚠️ Position Short fermée mais PAS par TP - Ignorer")
-                        position.short_open = False
-                        # Ne pas appeler handle_tp_short_executed si ce n'est pas un TP
+                # DÉTECTION ÉVÉNEMENT 1: TP Long exécuté (marge diminue fortement)
+                # Logique : TP touché → position fermée → rouverte avec marge initiale
+                # Ex: Marge était 3 USDT (Fib 1) → devient 1 USDT (Fib 0) = TP touché
+                if position.long_open and long_exists_now:
+                    if position.long_margin_previous > 0:
+                        # Si marge diminue de plus de 50% = TP touché
+                        margin_decrease_pct = ((position.long_margin_previous - long_margin_now) / position.long_margin_previous) * 100
+
+                        if margin_decrease_pct > 50:
+                            logger.info(f"🎯 TP Long détecté par marge: {position.long_margin_previous:.2f} → {long_margin_now:.2f} USDT ({margin_decrease_pct:.1f}% diminution)")
+
+                            # Enregistrer événement dans buffer trailing
+                            if hasattr(self, 'telegram_commands'):
+                                self.telegram_commands.log_event('TP_DETECTED', pair, {
+                                    'side': 'long',
+                                    'margin_before': position.long_margin_previous,
+                                    'margin_after': long_margin_now
+                                })
+
+                            self.handle_tp_long_executed(pair, position)
+                            # Mettre à jour la marge après traitement
+                            position.long_margin_previous = long_margin_now
+                            continue
+
+                    # Mise à jour marge pour prochaine vérification
+                    position.long_margin_previous = long_margin_now
+
+                # Si position Long disparue complètement
+                elif position.long_open and not long_exists_now:
+                    logger.warning(f"⚠️ Position Long fermée (disparue) - Vérification...")
+                    position.long_open = False
+                    # Ne rien faire, attend que position se rouvre
+
+                # DÉTECTION ÉVÉNEMENT 2: TP Short exécuté (marge diminue fortement)
+                if position.short_open and short_exists_now:
+                    if position.short_margin_previous > 0:
+                        # Si marge diminue de plus de 50% = TP touché
+                        margin_decrease_pct = ((position.short_margin_previous - short_margin_now) / position.short_margin_previous) * 100
+
+                        if margin_decrease_pct > 50:
+                            logger.info(f"🎯 TP Short détecté par marge: {position.short_margin_previous:.2f} → {short_margin_now:.2f} USDT ({margin_decrease_pct:.1f}% diminution)")
+
+                            # Enregistrer événement dans buffer trailing
+                            if hasattr(self, 'telegram_commands'):
+                                self.telegram_commands.log_event('TP_DETECTED', pair, {
+                                    'side': 'short',
+                                    'margin_before': position.short_margin_previous,
+                                    'margin_after': short_margin_now
+                                })
+
+                            self.handle_tp_short_executed(pair, position)
+                            # Mettre à jour la marge après traitement
+                            position.short_margin_previous = short_margin_now
+                            continue
+
+                    # Mise à jour marge pour prochaine vérification
+                    position.short_margin_previous = short_margin_now
+
+                # Si position Short disparue complètement
+                elif position.short_open and not short_exists_now:
+                    logger.warning(f"⚠️ Position Short fermée (disparue) - Vérification...")
+                    position.short_open = False
+                    # Ne rien faire, attend que position se rouvre
 
                 # DÉTECTION ÉVÉNEMENT 3: Fibonacci Long touché (size augmente)
                 if long_exists_now and position.long_size_previous > 0:
