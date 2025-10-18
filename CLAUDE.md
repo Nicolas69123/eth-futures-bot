@@ -53,6 +53,25 @@ screen -r trading  # Attacher session bot
 
 ---
 
+## 🤖 Règles Auto-Documentation
+
+**⚡ IMPORTANT : Si une info n'est PAS dans documentation.md :**
+
+1. ✅ **Cherche automatiquement** la doc officielle (WebFetch)
+2. ✅ **Stocke dans** `.claude/documentation.md`
+3. ✅ **Informe-moi** que la doc a été ajoutée
+
+**Exemples** :
+- Endpoint API inconnu → Cherche doc Bitget → Stocke
+- Nouvelle library → Cherche doc → Stocke
+- Version changée → Fetch nouvelle doc → Mise à jour
+
+**→ NE JAMAIS deviner ou utiliser connaissances générales obsolètes !**
+
+**→ TOUJOURS vérifier et stocker la doc actuelle !**
+
+---
+
 ## 📦 Fichiers Importants
 
 | Fichier | Description |

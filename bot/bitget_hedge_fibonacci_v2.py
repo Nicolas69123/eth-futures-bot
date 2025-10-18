@@ -1144,6 +1144,47 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             logger.error(traceback.format_exc())
             return []
 
+    def check_tp_exists_via_order_detail(self, order_id, pair):
+        """
+        Vérifie si un TP existe en récupérant les détails de l'ordre
+        Méthode fiable via presetStopSurplusPrice
+
+        Args:
+            order_id: ID de l'ordre TP
+            pair: La paire (ex: 'DOGE/USDT:USDT')
+
+        Returns:
+            bool: True si TP existe et est actif, False sinon
+        """
+        try:
+            if not order_id:
+                return False
+
+            logger.info(f"🔍 Vérification TP via order detail: {order_id[:8]}...")
+
+            # Fetch order details via ccxt
+            order = self.exchange.fetch_order(order_id, pair)
+
+            # Vérifier si ordre existe et est actif
+            if order['status'] == 'open':
+                # Vérifier si presetStopSurplusPrice existe dans info
+                order_info = order.get('info', {})
+                preset_tp = order_info.get('presetStopSurplusPrice')
+
+                if preset_tp:
+                    logger.info(f"✅ TP actif détecté: trigger @ {preset_tp}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Ordre actif mais pas de preset TP trouvé")
+                    return False
+            else:
+                logger.info(f"⚠️ Ordre status: {order['status']} - TP non actif")
+                return False
+
+        except Exception as e:
+            logger.error(f"Erreur vérification TP via order detail: {e}")
+            return False
+
     def check_if_tp_was_executed(self, pair, side):
         """
         Vérifie si un TP a vraiment été exécuté (pas juste position fermée)
