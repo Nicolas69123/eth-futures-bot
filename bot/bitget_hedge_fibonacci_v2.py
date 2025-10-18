@@ -213,6 +213,126 @@ class BitgetHedgeBotV2:
         except:
             return False
 
+    def send_detailed_position_update(self, pair, position):
+        """
+        Envoie des messages Telegram détaillés SÉPARÉS pour chaque position
+        Un message pour LONG, un message pour SHORT avec tous les détails
+        """
+        try:
+            # Récupérer positions réelles depuis API
+            real_pos = self.get_real_positions(pair)
+            if not real_pos:
+                return
+
+            # Récupérer les ordres ouverts
+            open_orders = self.exchange.fetch_open_orders(symbol=pair)
+            tpsl_orders = self.get_tpsl_orders(pair)
+
+            # MESSAGE POUR POSITION LONG
+            if real_pos.get('long'):
+                long_data = real_pos['long']
+                message_long = [f"🟢 <b>POSITION LONG - {pair.split('/')[0]}</b>"]
+                message_long.append("━━━━━━━━━━━━━━━━━━")
+
+                # Info position
+                message_long.append(f"📊 <b>Position Actuelle:</b>")
+                message_long.append(f"• Contrats: {long_data['size']:.0f}")
+                message_long.append(f"• Entrée: ${long_data['entry_price']:.5f}")
+                message_long.append(f"• Marge: {long_data['margin']:.7f} USDT")
+                message_long.append(f"• PnL: {long_data['pnl']:.7f} USDT ({long_data['pnl_pct']:.2f}%)")
+                message_long.append(f"• ROE: {long_data['roe']:.2f}%")
+                message_long.append(f"• Niveau Fib: {position.long_fib_level}")
+
+                # Info TP
+                message_long.append(f"\n🎯 <b>Take Profit Long:</b>")
+                tp_long_found = False
+                for order in tpsl_orders:
+                    if order.get('planType') == 'profit_plan' and order.get('side') == 'sell_single':
+                        tp_long_found = True
+                        tp_price = float(order.get('triggerPrice', 0))
+                        tp_size = float(order.get('size', 0))
+                        message_long.append(f"• Prix TP: ${tp_price:.5f}")
+                        message_long.append(f"• Distance: {((tp_price - long_data['entry_price']) / long_data['entry_price'] * 100):.2f}%")
+                        message_long.append(f"• Contrats: {tp_size:.0f}")
+                        break
+                if not tp_long_found:
+                    message_long.append("• ⚠️ TP Non placé!")
+
+                # Info Double Short (Fibonacci)
+                message_long.append(f"\n📉 <b>Ordre Double Short (Fib {position.long_fib_level + 1}):</b>")
+                double_short_found = False
+                for order in open_orders:
+                    if order.get('side') == 'sell' and order.get('type') == 'limit':
+                        double_short_found = True
+                        double_price = float(order.get('price', 0))
+                        double_size = float(order.get('amount', 0))
+                        next_margin = self.INITIAL_MARGIN * (3 ** (position.short_fib_level + 1))
+                        message_long.append(f"• Prix déclenchement: ${double_price:.5f}")
+                        message_long.append(f"• Distance: {((double_price - long_data['entry_price']) / long_data['entry_price'] * 100):.2f}%")
+                        message_long.append(f"• Contrats: {double_size:.0f}")
+                        message_long.append(f"• Marge prévue: {next_margin:.2f} USDT")
+                        break
+                if not double_short_found:
+                    message_long.append("• ⚠️ Ordre non placé!")
+
+                message_long.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                self.send_telegram("\n".join(message_long))
+
+            # MESSAGE POUR POSITION SHORT
+            if real_pos.get('short'):
+                short_data = real_pos['short']
+                message_short = [f"🔴 <b>POSITION SHORT - {pair.split('/')[0]}</b>"]
+                message_short.append("━━━━━━━━━━━━━━━━━━")
+
+                # Info position
+                message_short.append(f"📊 <b>Position Actuelle:</b>")
+                message_short.append(f"• Contrats: {short_data['size']:.0f}")
+                message_short.append(f"• Entrée: ${short_data['entry_price']:.5f}")
+                message_short.append(f"• Marge: {short_data['margin']:.7f} USDT")
+                message_short.append(f"• PnL: {short_data['pnl']:.7f} USDT ({short_data['pnl_pct']:.2f}%)")
+                message_short.append(f"• ROE: {short_data['roe']:.2f}%")
+                message_short.append(f"• Niveau Fib: {position.short_fib_level}")
+
+                # Info TP
+                message_short.append(f"\n🎯 <b>Take Profit Short:</b>")
+                tp_short_found = False
+                for order in tpsl_orders:
+                    if order.get('planType') == 'profit_plan' and order.get('side') == 'buy_single':
+                        tp_short_found = True
+                        tp_price = float(order.get('triggerPrice', 0))
+                        tp_size = float(order.get('size', 0))
+                        message_short.append(f"• Prix TP: ${tp_price:.5f}")
+                        message_short.append(f"• Distance: {((short_data['entry_price'] - tp_price) / short_data['entry_price'] * 100):.2f}%")
+                        message_short.append(f"• Contrats: {tp_size:.0f}")
+                        break
+                if not tp_short_found:
+                    message_short.append("• ⚠️ TP Non placé!")
+
+                # Info Double Long (Fibonacci)
+                message_short.append(f"\n📈 <b>Ordre Double Long (Fib {position.short_fib_level + 1}):</b>")
+                double_long_found = False
+                for order in open_orders:
+                    if order.get('side') == 'buy' and order.get('type') == 'limit':
+                        double_long_found = True
+                        double_price = float(order.get('price', 0))
+                        double_size = float(order.get('amount', 0))
+                        next_margin = self.INITIAL_MARGIN * (3 ** (position.long_fib_level + 1))
+                        message_short.append(f"• Prix déclenchement: ${double_price:.5f}")
+                        message_short.append(f"• Distance: {((short_data['entry_price'] - double_price) / short_data['entry_price'] * 100):.2f}%")
+                        message_short.append(f"• Contrats: {double_size:.0f}")
+                        message_short.append(f"• Marge prévue: {next_margin:.2f} USDT")
+                        break
+                if not double_long_found:
+                    message_short.append("• ⚠️ Ordre non placé!")
+
+                message_short.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                self.send_telegram("\n".join(message_short))
+
+        except Exception as e:
+            logger.error(f"Erreur send_detailed_position_update: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     def get_telegram_updates(self):
         """Récupère les nouveaux messages Telegram (commandes)"""
         if not self.telegram_token:
@@ -1280,46 +1400,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             self.capital_used += self.INITIAL_MARGIN * 2
             self.available_pairs.remove(pair)
 
-            # Récupérer les VRAIES données API après ouverture
-            final_real_pos = self.get_real_positions(pair)
-            if final_real_pos:
-                long_final = final_real_pos.get('long')
-                short_final = final_real_pos.get('short')
-
-                # Message Telegram avec VRAIES données + COULEURS
-                message_parts = [f"🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>\n"]
-
-                if long_final:
-                    message_parts.append(f"🟢 <b>LONG</b>")
-                    message_parts.append(f"🟢 Contrats: {long_final['size']:.0f}")
-                    message_parts.append(f"🟢 Entrée: ${long_final['entry_price']:.5f}")
-                    message_parts.append(f"🟢 Marge: {long_final['margin']:.7f} USDT\n")
-
-                if short_final:
-                    message_parts.append(f"🔴 <b>SHORT</b>")
-                    message_parts.append(f"🔴 Contrats: {short_final['size']:.0f}")
-                    message_parts.append(f"🔴 Entrée: ${short_final['entry_price']:.5f}")
-                    message_parts.append(f"🔴 Marge: {short_final['margin']:.7f} USDT\n")
-
-                message_parts.append(f"⚡ Levier: x{self.LEVERAGE}")
-                message_parts.append(f"\n📝 <b>Ordres:</b>")
-                message_parts.append(f"⬆️ Si +{next_trigger_pct}%: TP Long + Double Short")
-                message_parts.append(f"⬇️ Si -{next_trigger_pct}%: TP Short + Double Long")
-                message_parts.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
-
-                self.send_telegram("\n".join(message_parts))
-            else:
-                # Fallback si impossible de récupérer données
-                message = f"""
-🎯 <b>HEDGE OUVERT - {pair.split('/')[0]}</b>
-
-📈 Long: ${entry_long:.5f}
-📉 Short: ${entry_short:.5f}
-⚡ Levier: x{self.LEVERAGE}
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-                self.send_telegram(message)
+            # Envoyer les messages détaillés séparés pour chaque position
+            self.send_detailed_position_update(pair, position)
 
             return True
 
@@ -1600,6 +1682,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             # 7. Update size_previous
             position.long_size_previous = size_long_real
 
+            # 8. Envoyer messages détaillés séparés
+            self.send_detailed_position_update(pair, position)
+
         except Exception as e:
             logger.error(f"Erreur handle_tp_long_executed: {e}")
             import traceback
@@ -1701,6 +1786,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             # 7. Update size_previous
             position.short_size_previous = size_short_real
 
+            # 8. Envoyer messages détaillés séparés
+            self.send_detailed_position_update(pair, position)
+
         except Exception as e:
             logger.error(f"Erreur handle_tp_short_executed: {e}")
             import traceback
@@ -1792,6 +1880,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             # 7. Update size_previous
             position.long_size_previous = size_long_total
 
+            # 8. Envoyer messages détaillés séparés
+            self.send_detailed_position_update(pair, position)
+
         except Exception as e:
             logger.error(f"Erreur handle_fib_long_executed: {e}")
             import traceback
@@ -1882,6 +1973,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # 7. Update size_previous
             position.short_size_previous = size_short_total
+
+            # 8. Envoyer messages détaillés séparés
+            self.send_detailed_position_update(pair, position)
 
         except Exception as e:
             logger.error(f"Erreur handle_fib_short_executed: {e}")
