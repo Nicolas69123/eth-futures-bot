@@ -1779,6 +1779,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             print(f"✅ Long réouvert: {size_long:.4f} @ {self.format_price(current_price, pair)}")
 
+            # Log événement réouverture
+            if hasattr(self, 'telegram_commands'):
+                self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                    'order_type': 'market',
+                    'side': 'long',
+                    'action': 'reopen_after_tp'
+                })
+
             # 3. Attendre et récupérer position réelle
             time.sleep(2)
             real_pos = self.get_real_positions(pair)
@@ -1806,6 +1814,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 position.orders['double_long'] = double_order['id']
                 logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_pct}%, Fib 1)")
 
+                # Log événement ordre Fibonacci
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'limit',
+                        'side': 'long',
+                        'action': 'fib_order',
+                        'fib_level': 1
+                    })
+
             # 5. Attendre puis placer TP Long
             time.sleep(1)
             TP_FIXE = 0.3
@@ -1821,6 +1838,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if tp_order and tp_order.get('id'):
                 position.orders['tp_long'] = tp_order['id']
                 logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}% fixe)")
+
+                # Log événement TP placé
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'tp',
+                        'side': 'long',
+                        'action': 'tp_order'
+                    })
 
             # 6. Message Telegram
             time.sleep(1)
@@ -1883,6 +1908,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             print(f"✅ Short réouvert: {size_short:.4f} @ {self.format_price(current_price, pair)}")
 
+            # Log événement réouverture
+            if hasattr(self, 'telegram_commands'):
+                self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                    'order_type': 'market',
+                    'side': 'short',
+                    'action': 'reopen_after_tp'
+                })
+
             # 3. Attendre et récupérer position réelle
             time.sleep(2)
             real_pos = self.get_real_positions(pair)
@@ -1910,6 +1943,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 position.orders['double_short'] = double_order['id']
                 logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_pct}%, Fib 1)")
 
+                # Log événement ordre Fibonacci
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'limit',
+                        'side': 'short',
+                        'action': 'fib_order',
+                        'fib_level': 1
+                    })
+
             # 5. Attendre puis placer TP Short
             time.sleep(1)
             TP_FIXE = 0.3
@@ -1925,6 +1967,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if tp_order and tp_order.get('id'):
                 position.orders['tp_short'] = tp_order['id']
                 logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}% fixe)")
+
+                # Log événement TP placé
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'tp',
+                        'side': 'short',
+                        'action': 'tp_order'
+                    })
 
             # 6. Message Telegram
             time.sleep(1)
@@ -2004,6 +2054,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     position.orders['double_long'] = double_order['id']
                     logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_pct}%, Fib {next_level})")
 
+                    # Log événement ordre Fibonacci
+                    if hasattr(self, 'telegram_commands'):
+                        self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                            'order_type': 'limit',
+                            'side': 'long',
+                            'action': 'fib_order',
+                            'fib_level': next_level
+                        })
+
             # 5. Attendre puis placer TP Long
             time.sleep(1)
             TP_FIXE = 0.3
@@ -2019,6 +2078,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if tp_order and tp_order.get('id'):
                 position.orders['tp_long'] = tp_order['id']
                 logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}% fixe, {size_long_total:.0f} contrats)")
+
+                # Log événement TP placé
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'tp',
+                        'side': 'long',
+                        'action': 'tp_order'
+                    })
 
             # 6. Message Telegram
             time.sleep(1)
@@ -2098,6 +2165,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                     position.orders['double_short'] = double_order['id']
                     logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_pct}%, Fib {next_level})")
 
+                    # Log événement ordre Fibonacci
+                    if hasattr(self, 'telegram_commands'):
+                        self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                            'order_type': 'limit',
+                            'side': 'short',
+                            'action': 'fib_order',
+                            'fib_level': next_level
+                        })
+
             # 5. Attendre puis placer TP Short
             time.sleep(1)
             TP_FIXE = 0.3
@@ -2113,6 +2189,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if tp_order and tp_order.get('id'):
                 position.orders['tp_short'] = tp_order['id']
                 logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}% fixe, {size_short_total:.0f} contrats)")
+
+                # Log événement TP placé
+                if hasattr(self, 'telegram_commands'):
+                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
+                        'order_type': 'tp',
+                        'side': 'short',
+                        'action': 'tp_order'
+                    })
 
             # 6. Message Telegram
             time.sleep(1)
