@@ -25,10 +25,34 @@ case "$ACTION" in
         echo "🔄 Mise à jour depuis GitHub..."
         cd ~/eth-futures-bot
 
-        # Git pull
-        git pull
+        # Sauvegarder commit actuel pour log
+        CURRENT_COMMIT=$(git rev-parse --short HEAD)
+        echo "📍 Commit actuel: $CURRENT_COMMIT"
+
+        # Fetch pour voir les changements disponibles
+        git fetch origin main
+        LATEST_COMMIT=$(git rev-parse --short origin/main)
+        echo "📍 Dernier commit GitHub: $LATEST_COMMIT"
+
+        if [ "$CURRENT_COMMIT" = "$LATEST_COMMIT" ]; then
+            echo "✅ Déjà à jour (même commit)"
+        else
+            echo "📥 Changements détectés, mise à jour forcée..."
+
+            # FORCER la mise à jour (écraser modifications locales)
+            git reset --hard origin/main
+
+            if [ $? -eq 0 ]; then
+                NEW_COMMIT=$(git rev-parse --short HEAD)
+                echo "✅ Mise à jour réussie: $CURRENT_COMMIT → $NEW_COMMIT"
+            else
+                echo "❌ Erreur lors de git reset"
+                exit 1
+            fi
+        fi
 
         # Redémarrer
+        echo "♻️ Redémarrage du bot..."
         screen -X -S trading quit 2>/dev/null
         sleep 3
         screen -dmS trading bash -c './start_bot.sh'
