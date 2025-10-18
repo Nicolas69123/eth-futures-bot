@@ -19,6 +19,9 @@ import sys
 import logging
 from collections import deque
 
+# Import du module de commandes Telegram
+from telegram_commands import TelegramCommands
+
 # Charger .env
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -174,6 +177,14 @@ class BitgetHedgeBotV2:
         self.last_health_check = time.time()
         self.health_check_interval = 60  # Vérifier toutes les 60 secondes
         self.error_count = 0
+
+        # Log buffer pour les commandes
+        self.log_buffer = log_buffer  # Référence au buffer global
+
+        # Module de commandes Telegram
+        self.telegram_commands = TelegramCommands(self)
+        # Démarrer le monitoring des anomalies
+        self.telegram_commands.start_monitoring()
 
     def load_last_update_id(self):
         """Charge le dernier update_id depuis fichier pour éviter de retraiter les vieux messages"""
@@ -353,8 +364,18 @@ class BitgetHedgeBotV2:
         return []
 
     def handle_telegram_command(self, command):
-        """Traite les commandes Telegram reçues"""
+        """
+        Traite les commandes Telegram reçues
+        Délègue au module telegram_commands
+        """
+        try:
+            self.telegram_commands.process_command(command)
+        except Exception as e:
+            logger.error(f"Erreur traitement commande {command}: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
 
+    def OLD_handle_telegram_command_BACKUP(self, command):
+        """BACKUP - Ancienne version des commandes"""
         if command == '/pnl':
             # Afficher P&L actuel
             total_unrealized = 0
@@ -2158,6 +2179,11 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
     def open_next_hedge(self):
         """Ouvre un nouveau hedge sur la prochaine paire disponible"""
+        # Vérifier si le bot est en pause
+        if hasattr(self, 'telegram_commands') and self.telegram_commands.is_paused:
+            logger.info("Bot en pause - pas de nouvelle position")
+            return
+
         if self.available_pairs and self.capital_used < self.MAX_CAPITAL:
             next_pair = self.available_pairs[0]
             print(f"\n🔄 Rotation vers {next_pair}")
