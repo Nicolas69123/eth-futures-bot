@@ -183,8 +183,7 @@ class BitgetHedgeBotV2:
 
         # Module de commandes Telegram
         self.telegram_commands = TelegramCommands(self)
-        # Démarrer le monitoring des anomalies
-        self.telegram_commands.start_monitoring()
+        # Ne PAS démarrer le monitoring tout de suite - attendre après cleanup
 
     def load_last_update_id(self):
         """Charge le dernier update_id depuis fichier pour éviter de retraiter les vieux messages"""
@@ -2248,12 +2247,13 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def cleanup_all_positions_and_orders(self):
         """
         Nettoie TOUTES les positions et ordres au démarrage
-        Pour repartir sur des bases propres
-        Utilise force_close_position pour garantir fermeture complète
+        FORCE la fermeture de tout pour garantir une session propre
         """
         logger.info("=== NETTOYAGE COMPLET DÉMARRÉ ===")
-        print("\n🧹 NETTOYAGE DES POSITIONS ET ORDRES EXISTANTS...")
-        self.send_telegram("🧹 <b>Nettoyage session précédente...</b>")
+        print("\n" + "="*50)
+        print("🧹 NETTOYAGE FORCÉ - FERMETURE DE TOUT")
+        print("="*50)
+        self.send_telegram("🧹 <b>NETTOYAGE FORCÉ EN COURS...</b>\n\n⚠️ Fermeture de TOUTES les positions et ordres")
 
         cleanup_report = []
 
@@ -2362,8 +2362,69 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             print(f"❌ Erreur pendant le nettoyage: {e}")
             self.send_telegram(f"⚠️ Erreur nettoyage: {e}")
 
+        # VÉRIFICATION FINALE ABSOLUE - S'assurer que TOUT est vraiment fermé
+        print("\n🔍 Vérification finale après cleanup...")
+        logger.info("Vérification finale post-cleanup")
+
+        positions_restantes = []
+        ordres_restants = []
+
+        for pair in self.volatile_pairs:
+            try:
+                # Vérifier positions
+                positions = self.exchange.fetch_positions(symbols=[pair])
+                for pos in positions:
+                    if float(pos.get('contracts', 0)) > 0:
+                        side = pos.get('side', '').lower()
+                        size = float(pos.get('contracts', 0))
+                        positions_restantes.append(f"{side.upper()} {pair}: {size}")
+                        logger.error(f"❌ POSITION TOUJOURS OUVERTE APRÈS CLEANUP: {side} {pair} - {size} contrats")
+
+                # Vérifier ordres limites
+                open_orders = self.exchange.fetch_open_orders(symbol=pair)
+                if open_orders:
+                    ordres_restants.append(f"{pair}: {len(open_orders)} ordres")
+                    logger.error(f"❌ ORDRES TOUJOURS ACTIFS APRÈS CLEANUP: {pair} - {len(open_orders)} ordres")
+
+                # Vérifier ordres TP/SL
+                tpsl = self.get_tpsl_orders(pair)
+                if tpsl:
+                    ordres_restants.append(f"{pair}: {len(tpsl)} TP/SL")
+                    logger.error(f"❌ TP/SL TOUJOURS ACTIFS APRÈS CLEANUP: {pair} - {len(tpsl)} ordres")
+
+            except Exception as e:
+                logger.error(f"Erreur vérification finale {pair}: {e}")
+
+        if positions_restantes or ordres_restants:
+            alert_msg = "🚨 <b>ALERTE CLEANUP INCOMPLET!</b>\n\n"
+            if positions_restantes:
+                alert_msg += "❌ Positions restantes:\n"
+                alert_msg += "\n".join(positions_restantes) + "\n\n"
+            if ordres_restants:
+                alert_msg += "❌ Ordres restants:\n"
+                alert_msg += "\n".join(ordres_restants)
+
+            self.send_telegram(alert_msg)
+            print("⚠️ ATTENTION: Cleanup incomplet, voir logs")
+
+            # Essayer une deuxième fois plus agressive
+            print("🔄 Tentative de cleanup forcé supplémentaire...")
+            for pair in self.volatile_pairs:
+                try:
+                    positions = self.exchange.fetch_positions(symbols=[pair])
+                    for pos in positions:
+                        if float(pos.get('contracts', 0)) > 0:
+                            side = pos.get('side', '').lower()
+                            self.flash_close_position(pair, side)
+                            time.sleep(1)
+                except:
+                    pass
+        else:
+            print("✅ Vérification finale: TOUT est fermé!")
+            logger.info("✅ Cleanup complet vérifié - aucune position ni ordre restant")
+
         # Attendre un peu avant de commencer
-        time.sleep(2)
+        time.sleep(3)
 
     def perform_health_check(self):
         """
@@ -2709,6 +2770,14 @@ Erreurs totales: {self.error_count}
             logger.info("Nettoyage complet au démarrage")
             print("\n🧹 Nettoyage de toutes les positions et ordres...")
             self.cleanup_all_positions_and_orders()
+
+            # Attendre que le cleanup soit bien terminé
+            print("⏳ Attente finalisation cleanup (5 secondes)...")
+            time.sleep(5)
+
+            # MAINTENANT démarrer le monitoring des anomalies
+            logger.info("Démarrage du monitoring des anomalies")
+            self.telegram_commands.start_monitoring()
 
             # Message démarrage
             startup = f"""
