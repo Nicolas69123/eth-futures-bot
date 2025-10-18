@@ -1,32 +1,38 @@
 # Avancement du Projet - Trading Bot
 
-> **Dernière mise à jour** : 2025-10-18 (soirée)
+> **Dernière mise à jour** : 2025-10-19
 
 ---
 
 ## 🎯 Session Actuelle
 
-**Date** : 2025-10-18 (soirée)
-**Focus** : Système documentation automatique + finalisation structure complète
+**Date** : 2025-10-19
+**Focus** : Amélioration système détection TP + Trailing logs complet
 
 ### Ce qui a été fait aujourd'hui
 
-- ✅ Système documentation.md créé pour TOUS les projets (7 projets)
-- ✅ Docs pré-remplies (Bitget API, Telegram, Fibonacci, FinRL, Anthropic, Supabase, NumPy, Ollama, N8N)
-- ✅ Instructions auto-documentation ajoutées dans CLAUDE.md (Claude cherche et stocke doc automatiquement)
-- ✅ Script 📥 Setup Documentation.command (télécharge toutes les docs d'un coup)
-- ✅ Refonte scripts .command avec tmux + bypass permissions (comme Claude Full)
-- ✅ Renommage scripts (noms simples : Trading-Bot, FinRL, etc.)
-- ✅ Guides complets (10+ fichiers documentation)
-- ✅ Clarification workflow : "Update progress.md" = méthode recommandée
+- ✅ Synchronisation GitHub (résolution problème modifications non pushées)
+- ✅ Ajout log_event() dans toutes les fonctions handle_* (TP/Fib long/short)
+  - handle_tp_long_executed: 3 logs (market, fib, tp)
+  - handle_tp_short_executed: 3 logs (market, fib, tp)
+  - handle_fib_long_executed: 2 logs (fib, tp)
+  - handle_fib_short_executed: 2 logs (fib, tp)
+- ✅ Système trailing logs avec mémoire 5 secondes opérationnel
+  - Buffer deque(maxlen=100) pour événements
+  - Détection anomalies: vérifie réouverture dans les 3s après TP détecté
+- ✅ Tests API Bitget pour comprendre presetStopSurplusPrice
+  - Confirmation: champs existent seulement pour ordres LIMIT avec TP intégré
+  - Validation stratégie actuelle: ordres TP séparés (plan orders) = ferme position entière ✅
+- ✅ Fonction check_tp_exists_via_order_detail() ajoutée (méthode fiable vérification TP)
+- ✅ 3 commits pushés sur GitHub (Documentation Claude + logs + tests API)
 
 ### Prochaines étapes immédiates
 
-1. Tester système complet sur session réelle
-2. Vérifier bot Oracle Cloud fonctionne après restructuration
-3. Utiliser workflow : "Update progress.md" en fin de session
-4. Ajouter instructions auto-doc aux 5 autres projets si souhaité
-5. Setup documentation initiale avec script pour projets manquants
+1. ✅ Faire `/restart` sur bot Telegram pour activer améliorations
+2. Observer logs réels pour vérifier détection TP par marge
+3. Vérifier que trailing logs détecte bien les anomalies
+4. Tester en conditions réelles (attendre TP touché)
+5. Analyser performance amélioration détection
 
 ---
 
@@ -45,6 +51,16 @@
 ---
 
 ## 🗓️ Dernières Sessions
+
+### Session 2025-10-19 - Amélioration Détection TP + Trailing Logs
+**Focus** : Système de détection TP fiable + logs trailing complet
+- Ajout log_event() dans toutes les fonctions handle_* (10 logs au total)
+- Système trailing logs avec buffer 5 secondes (mémoire événements)
+- Détection automatique si réouverture manquée après TP
+- Tests API Bitget pour comprendre presetStopSurplusPrice vs ordres plan séparés
+- Validation stratégie: ordres TP séparés (plan orders) = meilleure approche
+- Fonction check_tp_exists_via_order_detail() ajoutée
+- 3 commits GitHub: documentation, logs, tests API
 
 ### Session 2025-10-18 (soirée) - Système Documentation
 **Focus** : Documentation automatique + finalisation système
@@ -101,6 +117,14 @@ Progress : ████████░░ 85%
 
 ## 💡 Décisions Récentes
 
+**2025-10-19** : Détection TP par diminution de marge + trailing logs
+→ Raison : Plus fiable que vérification disparition position (évite faux positifs lag API)
+→ Méthode : marge diminue >50% = TP touché, + buffer 5s vérifie réouverture dans les 3s
+
+**2025-10-19** : Conserver stratégie ordres TP séparés (plan orders)
+→ Raison : Ferme TOUTE la position vs ordres LIMIT avec TP intégré (ferme seulement cet ordre)
+→ API : /api/v2/mix/order/place-tpsl-order avec planType: "profit_plan"
+
 **2025-10-18** : Structure modulaire CLAUDE.md
 → Raison : Optimisation contexte, meilleure maintenabilité
 
@@ -126,16 +150,23 @@ Aucun bug critique actuellement.
 ## 📝 Notes pour Prochaine Session
 
 **À FAIRE** :
-1. Vérifier performance bot dernières 24h
-2. Analyser trades récents (win/loss)
-3. Backtester stratégie sur données historiques
-4. Documenter résultats dans changelog.md
+1. ✅ Faire `/restart` sur bot Telegram (activer nouvelles améliorations)
+2. Observer logs réels détection TP par marge (vérifier taux succès)
+3. Vérifier que trailing logs détecte bien les anomalies
+4. Analyser trades récents et performance détection TP
+5. Si stable: documenter résultats dans changelog.md
+
+**PRIORITÉS** :
+- Tester système détection TP en conditions réelles (attendre TP touché)
+- Vérifier que réouverture automatique fonctionne bien
+- Monitorer alertes Telegram pour anomalies détectées
 
 **IDÉES** :
 - Ajouter indicateurs RSI + MACD en complément Fibonacci
 - Multi-timeframe analysis (15min + 1h + 4h)
 - Auto-stop si drawdown > X%
 - Dashboard web (simple Flask app)
+- Backtesting historique pour valider stratégie
 
 ---
 
