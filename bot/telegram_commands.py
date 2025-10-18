@@ -673,6 +673,10 @@ Pour reprendre: /resume
         self.bot.send_telegram("🔄 <b>MISE À JOUR...</b>\n\n⚠️ Le bot va redémarrer.\n\nPatientez 20 secondes.")
 
         try:
+            # IMPORTANT: Sauvegarder l'ID AVANT de quitter pour éviter la boucle
+            self.bot.save_last_update_id()
+            logger.info("last_telegram_update_id sauvegardé avant update")
+
             manage_script = Path(__file__).parent.parent / 'manage_local.sh'
 
             if not manage_script.exists():
@@ -684,6 +688,7 @@ Pour reprendre: /resume
                            stderr=subprocess.DEVNULL,
                            start_new_session=True)
 
+            time.sleep(1)  # Petite attente pour que le message parte
             sys.exit(0)
 
         except Exception as e:
@@ -695,6 +700,10 @@ Pour reprendre: /resume
         self.bot.send_telegram("♻️ <b>REDÉMARRAGE...</b>\n\n⚠️ Le bot va redémarrer.\n\nPatientez 20 secondes.")
 
         try:
+            # IMPORTANT: Sauvegarder l'ID AVANT de quitter pour éviter la boucle
+            self.bot.save_last_update_id()
+            logger.info("last_telegram_update_id sauvegardé avant restart")
+
             manage_script = Path(__file__).parent.parent / 'manage_local.sh'
 
             if not manage_script.exists():
@@ -706,6 +715,7 @@ Pour reprendre: /resume
                            stderr=subprocess.DEVNULL,
                            start_new_session=True)
 
+            time.sleep(1)  # Petite attente pour que le message parte
             sys.exit(0)
 
         except Exception as e:

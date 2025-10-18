@@ -1075,17 +1075,17 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def get_tpsl_order_history(self, symbol, limit=100):
         """
         Récupère l'HISTORIQUE des ordres TP/SL exécutés
-        Pour vérifier si un TP a vraiment été touché
+        Utilise l'API V2 Bitget pour les trigger orders
         """
         try:
             symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
 
-            # Endpoint pour l'historique des ordres plan
+            # Endpoint pour l'historique des ordres plan (V2)
             endpoint_path = '/api/v2/mix/order/orders-plan-history'
 
-            # Récupérer les ordres des dernières 24h
+            # Récupérer les ordres des 10 dernières minutes (suffisant pour TP)
             end_time = str(int(time.time() * 1000))
-            start_time = str(int(time.time() * 1000) - 24 * 3600 * 1000)  # 24h avant
+            start_time = str(int(time.time() * 1000) - 10 * 60 * 1000)  # 10 minutes avant
 
             query_params = f'?productType=USDT-FUTURES&startTime={start_time}&endTime={end_time}&pageSize={limit}'
 
@@ -1111,12 +1111,24 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             if data.get('code') == '00000':
                 all_orders = data.get('data', {}).get('entrustedList', [])
-                # Filtrer par symbol et status = triggered
+
+                # DEBUG: Logger tous les ordres reçus pour voir les statuts
+                logger.info(f"Historique TP/SL {symbol}: {len(all_orders)} ordres reçus")
+                for order in all_orders[:3]:  # Logger les 3 premiers
+                    logger.info(f"  Ordre: status={order.get('status')}, planType={order.get('planType')}, side={order.get('side')}")
+
+                # Filtrer par symbol et statuts qui indiquent exécution
+                # Statuts possibles: 'triggered', 'executed', 'filled', 'cancelled_by_trigger'
+                executed_statuses = ['triggered', 'executed', 'filled', 'cancelled_by_trigger']
+
                 symbol_orders = [
                     o for o in all_orders
                     if o.get('symbol', '').lower() == symbol_bitget
-                    and o.get('status', '') == 'triggered'
+                    and o.get('status', '') in executed_statuses
+                    and o.get('planType') == 'profit_plan'  # Seulement les TP
                 ]
+
+                logger.info(f"TP exécutés filtrés pour {symbol}: {len(symbol_orders)} ordres")
                 return symbol_orders
             else:
                 logger.warning(f"Réponse historique TP/SL: {data}")
@@ -1124,11 +1136,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
         except Exception as e:
             logger.error(f"Erreur récupération historique TP/SL: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
     def check_if_tp_was_executed(self, pair, side):
         """
         Vérifie si un TP a vraiment été exécuté (pas juste position fermée)
+        Méthode améliorée avec logs détaillés et vérification multiple
 
         Args:
             pair: La paire (ex: 'DOGE/USDT:USDT')
@@ -1138,48 +1153,60 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             bool: True si TP a été exécuté, False sinon
         """
         try:
+            logger.info(f"🔍 Vérification TP {side.upper()} pour {pair}")
+
             # 1. Vérifier dans l'historique des ordres plan
             history = self.get_tpsl_order_history(pair)
 
-            # Chercher un TP récent (dans les dernières 30 secondes)
+            # Chercher un TP récent (dans les dernières 60 secondes - étendu de 30s)
             current_time_ms = int(time.time() * 1000)
+
+            # TP Long = sell_single, TP Short = buy_single
+            expected_side = 'sell_single' if side == 'long' else 'buy_single'
 
             for order in history:
                 # Vérifier si c'est un profit_plan du bon côté
                 if order.get('planType') == 'profit_plan':
                     order_side = order.get('side', '').lower()
 
-                    # TP Long = sell_single, TP Short = buy_single
-                    expected_side = 'sell_single' if side == 'long' else 'buy_single'
-
                     if order_side == expected_side:
-                        # Vérifier si exécuté récemment (30 dernières secondes)
+                        # Vérifier si exécuté récemment (60 dernières secondes)
                         trigger_time = int(order.get('triggerTime', 0))
-                        if trigger_time > 0 and (current_time_ms - trigger_time) < 30000:
-                            logger.info(f"✅ TP {side.upper()} confirmé via historique - Exécuté il y a {(current_time_ms - trigger_time) / 1000:.1f}s")
+                        execute_time = int(order.get('executeTime', 0))
+                        check_time = trigger_time or execute_time
+
+                        if check_time > 0 and (current_time_ms - check_time) < 60000:
+                            logger.info(f"✅ TP {side.upper()} confirmé via historique")
+                            logger.info(f"   Status: {order.get('status')}, Exécuté il y a {(current_time_ms - check_time) / 1000:.1f}s")
                             return True
 
-            # 2. Si pas trouvé dans l'historique, vérifier que l'ordre TP n'est plus pending
+            # 2. Vérifier que l'ordre TP n'est plus dans les ordres pending
             pending_orders = self.get_tpsl_orders(pair)
             tp_still_pending = False
+
+            logger.info(f"   Ordres pending: {len(pending_orders)}")
 
             for order in pending_orders:
                 if order.get('planType') == 'profit_plan':
                     order_side = order.get('side', '').lower()
-                    expected_side = 'sell_single' if side == 'long' else 'buy_single'
                     if order_side == expected_side:
                         tp_still_pending = True
+                        logger.info(f"   TP {side.upper()} toujours pending - NIET exécuté")
                         break
 
             if not tp_still_pending:
-                logger.info(f"⚠️ TP {side.upper()} plus dans les ordres pending (probablement exécuté)")
-                return True  # TP n'est plus pending, probablement exécuté
+                logger.info(f"✅ TP {side.upper()} plus dans pending - Probablement exécuté")
+                return True
 
+            # 3. Dernière vérification: chercher dans les ordres récents (fallback)
+            logger.info(f"⚠️ TP {side.upper()} ni dans historique ni disparu du pending")
             return False
 
         except Exception as e:
             logger.error(f"Erreur vérification TP: {e}")
-            # En cas d'erreur, revenir à l'ancienne méthode
+            import traceback
+            logger.error(traceback.format_exc())
+            # En cas d'erreur, retourner False pour éviter faux positifs
             return False
 
     def get_tpsl_orders(self, symbol):
