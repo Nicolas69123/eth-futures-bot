@@ -1052,6 +1052,116 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             print(f"❌ Erreur placement TP/SL: {e}")
             return None
 
+    def get_tpsl_order_history(self, symbol, limit=100):
+        """
+        Récupère l'HISTORIQUE des ordres TP/SL exécutés
+        Pour vérifier si un TP a vraiment été touché
+        """
+        try:
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+
+            # Endpoint pour l'historique des ordres plan
+            endpoint_path = '/api/v2/mix/order/orders-plan-history'
+
+            # Récupérer les ordres des dernières 24h
+            end_time = str(int(time.time() * 1000))
+            start_time = str(int(time.time() * 1000) - 24 * 3600 * 1000)  # 24h avant
+
+            query_params = f'?productType=USDT-FUTURES&startTime={start_time}&endTime={end_time}&pageSize={limit}'
+
+            # Timestamp et signature
+            timestamp = str(int(time.time() * 1000))
+            signature = self.bitget_sign_request(timestamp, 'GET', endpoint_path + query_params, '')
+
+            # Headers
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': signature,
+                'ACCESS-TIMESTAMP': timestamp,
+                'ACCESS-PASSPHRASE': self.api_password,
+                'Content-Type': 'application/json',
+                'locale': 'en-US',
+                'PAPTRADING': '1'
+            }
+
+            # Requête HTTP
+            url = f"https://api.bitget.com{endpoint_path}{query_params}"
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+
+            if data.get('code') == '00000':
+                all_orders = data.get('data', {}).get('entrustedList', [])
+                # Filtrer par symbol et status = triggered
+                symbol_orders = [
+                    o for o in all_orders
+                    if o.get('symbol', '').lower() == symbol_bitget
+                    and o.get('status', '') == 'triggered'
+                ]
+                return symbol_orders
+            else:
+                logger.warning(f"Réponse historique TP/SL: {data}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Erreur récupération historique TP/SL: {e}")
+            return []
+
+    def check_if_tp_was_executed(self, pair, side):
+        """
+        Vérifie si un TP a vraiment été exécuté (pas juste position fermée)
+
+        Args:
+            pair: La paire (ex: 'DOGE/USDT:USDT')
+            side: 'long' ou 'short'
+
+        Returns:
+            bool: True si TP a été exécuté, False sinon
+        """
+        try:
+            # 1. Vérifier dans l'historique des ordres plan
+            history = self.get_tpsl_order_history(pair)
+
+            # Chercher un TP récent (dans les dernières 30 secondes)
+            current_time_ms = int(time.time() * 1000)
+
+            for order in history:
+                # Vérifier si c'est un profit_plan du bon côté
+                if order.get('planType') == 'profit_plan':
+                    order_side = order.get('side', '').lower()
+
+                    # TP Long = sell_single, TP Short = buy_single
+                    expected_side = 'sell_single' if side == 'long' else 'buy_single'
+
+                    if order_side == expected_side:
+                        # Vérifier si exécuté récemment (30 dernières secondes)
+                        trigger_time = int(order.get('triggerTime', 0))
+                        if trigger_time > 0 and (current_time_ms - trigger_time) < 30000:
+                            logger.info(f"✅ TP {side.upper()} confirmé via historique - Exécuté il y a {(current_time_ms - trigger_time) / 1000:.1f}s")
+                            return True
+
+            # 2. Si pas trouvé dans l'historique, vérifier que l'ordre TP n'est plus pending
+            pending_orders = self.get_tpsl_orders(pair)
+            tp_still_pending = False
+
+            for order in pending_orders:
+                if order.get('planType') == 'profit_plan':
+                    order_side = order.get('side', '').lower()
+                    expected_side = 'sell_single' if side == 'long' else 'buy_single'
+                    if order_side == expected_side:
+                        tp_still_pending = True
+                        break
+
+            if not tp_still_pending:
+                logger.info(f"⚠️ TP {side.upper()} plus dans les ordres pending (probablement exécuté)")
+                return True  # TP n'est plus pending, probablement exécuté
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Erreur vérification TP: {e}")
+            # En cas d'erreur, revenir à l'ancienne méthode
+            return False
+
     def get_tpsl_orders(self, symbol):
         """Récupère les ordres TP/SL plan en cours via HTTP direct"""
         try:
@@ -2003,17 +2113,31 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 long_size_now = real_pos['long']['size'] if long_exists_now else 0
                 short_size_now = real_pos['short']['size'] if short_exists_now else 0
 
-                # DÉTECTION ÉVÉNEMENT 1: TP Long exécuté (Long disparu)
+                # DÉTECTION ÉVÉNEMENT 1: TP Long exécuté (Long disparu + vérification TP)
                 if position.long_open and not long_exists_now:
-                    self.handle_tp_long_executed(pair, position)
-                    position.long_open = False
-                    continue
+                    # Double vérification : position disparue ET TP vraiment exécuté
+                    if self.check_if_tp_was_executed(pair, 'long'):
+                        logger.info(f"✅ TP Long confirmé par double vérification")
+                        self.handle_tp_long_executed(pair, position)
+                        position.long_open = False
+                        continue
+                    else:
+                        logger.warning(f"⚠️ Position Long fermée mais PAS par TP - Ignorer")
+                        position.long_open = False
+                        # Ne pas appeler handle_tp_long_executed si ce n'est pas un TP
 
-                # DÉTECTION ÉVÉNEMENT 2: TP Short exécuté (Short disparu)
+                # DÉTECTION ÉVÉNEMENT 2: TP Short exécuté (Short disparu + vérification TP)
                 if position.short_open and not short_exists_now:
-                    self.handle_tp_short_executed(pair, position)
-                    position.short_open = False
-                    continue
+                    # Double vérification : position disparue ET TP vraiment exécuté
+                    if self.check_if_tp_was_executed(pair, 'short'):
+                        logger.info(f"✅ TP Short confirmé par double vérification")
+                        self.handle_tp_short_executed(pair, position)
+                        position.short_open = False
+                        continue
+                    else:
+                        logger.warning(f"⚠️ Position Short fermée mais PAS par TP - Ignorer")
+                        position.short_open = False
+                        # Ne pas appeler handle_tp_short_executed si ce n'est pas un TP
 
                 # DÉTECTION ÉVÉNEMENT 3: Fibonacci Long touché (size augmente)
                 if long_exists_now and position.long_size_previous > 0:
