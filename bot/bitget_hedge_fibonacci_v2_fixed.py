@@ -820,11 +820,11 @@ class BitgetHedgeBotV2Fixed:
                 fibo_long_price = entry_long_avg * (1 - self.FIBO_LEVELS[next_level] / 100)
 
                 fibo_order = self.exchange.create_order(
-                    symbol=self.PAIR, type='limit', side='buy', amount=size_long_total * 2,
+                    symbol=self.PAIR, type='limit', side='buy', amount=size_long_total,
                     price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
                 )
                 self.position.orders['double_long'] = fibo_order['id']
-                logger.info(f"   ✅ LIMIT BUY @ ${fibo_long_price:.5f}")
+                logger.info(f"   ✅ LIMIT BUY @ ${fibo_long_price:.5f} (size: {size_long_total:.0f})")
             else:
                 logger.warning("   ⚠️ Niveau Fibo max atteint, pas de nouveau LIMIT")
 
@@ -910,11 +910,11 @@ class BitgetHedgeBotV2Fixed:
                 fibo_short_price = entry_short_avg * (1 + self.FIBO_LEVELS[next_level] / 100)
 
                 fibo_order = self.exchange.create_order(
-                    symbol=self.PAIR, type='limit', side='sell', amount=size_short_total * 2,
+                    symbol=self.PAIR, type='limit', side='sell', amount=size_short_total,
                     price=fibo_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
                 )
                 self.position.orders['double_short'] = fibo_order['id']
-                logger.info(f"   ✅ LIMIT SELL @ ${fibo_short_price:.5f}")
+                logger.info(f"   ✅ LIMIT SELL @ ${fibo_short_price:.5f} (size: {size_short_total:.0f})")
             else:
                 logger.warning("   ⚠️ Niveau Fibo max atteint, pas de nouveau LIMIT")
 
