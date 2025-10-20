@@ -1245,46 +1245,12 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             return False
 
     def get_tpsl_orders(self, symbol):
-        """Récupère les ordres TP/SL plan en cours via HTTP direct"""
-        try:
-            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')  # Majuscules (DOGEUSDT)
-
-            # Endpoint (sans query params dans le path pour la signature)
-            endpoint_path = '/api/v2/mix/order/orders-plan-pending'
-            query_params = f'?productType=USDT-FUTURES'  # Sans planType (récupérer tous)
-
-            # Timestamp et signature
-            timestamp = str(int(time.time() * 1000))
-            signature = self.bitget_sign_request(timestamp, 'GET', endpoint_path + query_params, '')
-
-            # Headers
-            headers = {
-                'ACCESS-KEY': self.api_key,
-                'ACCESS-SIGN': signature,
-                'ACCESS-TIMESTAMP': timestamp,
-                'ACCESS-PASSPHRASE': self.api_password,
-                'Content-Type': 'application/json',
-                'locale': 'en-US',
-                'PAPTRADING': '1'
-            }
-
-            # Requête HTTP
-            url = f"https://api.bitget.com{endpoint_path}{query_params}"
-            response = requests.get(url, headers=headers, timeout=10)
-            data = response.json()
-
-            if data.get('code') == '00000':
-                all_orders = data.get('data', {}).get('entrustedList', [])
-                # Filtrer par symbol
-                symbol_orders = [o for o in all_orders if o.get('symbol', '').lower() == symbol_bitget]
-                return symbol_orders
-            else:
-                print(f"⚠️ Réponse TP/SL: {data}")
-                return []
-
-        except Exception as e:
-            print(f"⚠️ Erreur récupération TP/SL: {e}")
-            return []
+        """
+        DÉSACTIVÉE: Endpoint GET /api/v2/mix/order/orders-plan-pending retourne 400172
+        Les TP/SL se placent correctement via place_tpsl_order() (POST)
+        Cette fonction GET n'était utilisée que pour afficher les ordres (pas critique)
+        """
+        return []  # Toujours retourner vide
 
     def get_total_fees(self):
         """
