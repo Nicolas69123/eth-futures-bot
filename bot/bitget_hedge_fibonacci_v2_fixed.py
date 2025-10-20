@@ -386,16 +386,18 @@ class BitgetHedgeBotV2Fixed:
 
     def open_initial_hedge(self):
         """
-        Open initial hedge: LONG + SHORT + 2 TP orders ONLY
+        Open initial hedge: LONG + SHORT + 4 orders (2 TP + 2 LIMIT Fibo)
 
         Orders created:
         1. LONG market
         2. SHORT market
         3. TP LONG
         4. TP SHORT
+        5. LIMIT LONG (Fibo) - Double la marge LONG
+        6. LIMIT SHORT (Fibo) - Double la marge SHORT
         """
         logger.info("\n" + "="*80)
-        logger.info("🚀 OUVERTURE HEDGE INITIAL (2 TP SEULEMENT)")
+        logger.info("🚀 OUVERTURE HEDGE INITIAL (2 TP + 2 LIMIT FIBO)")
         logger.info("="*80)
 
         try:
@@ -408,7 +410,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"Size calculée: {size:.1f} contrats (${notional} notional)")
 
             # 1. Open LONG market
-            logger.info("\n[1/4] Ouverture LONG MARKET...")
+            logger.info("\n[1/6] Ouverture LONG MARKET...")
             long_order = self.exchange.create_order(
                 symbol=self.PAIR, type='market', side='buy', amount=size,
                 params={'tradeSide': 'open', 'holdSide': 'long'}
@@ -416,7 +418,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"   ✅ LONG ouvert: {long_order['id']}")
 
             # 2. Open SHORT market
-            logger.info("\n[2/4] Ouverture SHORT MARKET...")
+            logger.info("\n[2/6] Ouverture SHORT MARKET...")
             short_order = self.exchange.create_order(
                 symbol=self.PAIR, type='market', side='sell', amount=size,
                 params={'tradeSide': 'open', 'holdSide': 'short'}
@@ -462,7 +464,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"   Fibo Short: ${fibo_short_price:.5f} (+{self.FIBO_LEVELS[0]}%)")
 
             # 3. Place TP LONG
-            logger.info("\n[3/4] Placement TP LONG...")
+            logger.info("\n[3/6] Placement TP LONG...")
             time.sleep(2)
             tp_long = self.place_tpsl_order(
                 trigger_price=tp_long_price,
@@ -475,7 +477,7 @@ class BitgetHedgeBotV2Fixed:
                 logger.info(f"   ✅ TP Long: {tp_long['id']}")
 
             # 4. Place TP SHORT
-            logger.info("\n[4/4] Placement TP SHORT...")
+            logger.info("\n[4/6] Placement TP SHORT...")
             time.sleep(2)
             tp_short = self.place_tpsl_order(
                 trigger_price=tp_short_price,
@@ -487,13 +489,34 @@ class BitgetHedgeBotV2Fixed:
                 self.position.orders['tp_short'] = tp_short['id']
                 logger.info(f"   ✅ TP Short: {tp_short['id']}")
 
+            # 5. Place LIMIT BUY (double la marge LONG quand exécuté)
+            logger.info("\n[5/6] Placement LIMIT BUY (Fibo Long - double marge)...")
+            time.sleep(1)
+            fibo_long = self.exchange.create_order(
+                symbol=self.PAIR, type='limit', side='buy', amount=size_long,
+                price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+            )
+            self.position.orders['double_long'] = fibo_long['id']
+            logger.info(f"   ✅ LIMIT BUY: {fibo_long['id']} - {size_long:.0f} @ ${fibo_long_price:.5f}")
+
+            # 6. Place LIMIT SELL (double la marge SHORT quand exécuté)
+            logger.info("\n[6/6] Placement LIMIT SELL (Fibo Short - double marge)...")
+            time.sleep(1)
+            fibo_short = self.exchange.create_order(
+                symbol=self.PAIR, type='limit', side='sell', amount=size_short,
+                price=fibo_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+            )
+            self.position.orders['double_short'] = fibo_short['id']
+            logger.info(f"   ✅ LIMIT SELL: {fibo_short['id']} - {size_short:.0f} @ ${fibo_short_price:.5f}")
+
             logger.info("\n" + "="*80)
             logger.info("✅ HEDGE INITIAL COMPLET!")
             logger.info("="*80)
             logger.info(f"📊 Résumé:")
             logger.info(f"   Positions: LONG {size_long:.0f} + SHORT {size_short:.0f}")
-            logger.info(f"   Ordres TP: 2 SEULEMENT")
-            logger.info(f"   Total: 2 positions + 2 ordres TP")
+            logger.info(f"   Ordres TP: 2")
+            logger.info(f"   Ordres LIMIT Fibo: 2 (doublent la marge)")
+            logger.info(f"   Total: 2 positions + 4 ordres")
 
             return True
 
