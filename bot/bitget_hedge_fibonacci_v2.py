@@ -2280,6 +2280,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 if not real_pos:
                     continue
 
+                # ⚙️ INITIALISATION PREMIÈRE ITÉRATION (valeurs _previous à 0)
+                if position.long_margin_previous == 0 and real_pos.get('long'):
+                    position.long_margin_previous = real_pos['long']['margin']
+                    position.long_size_previous = real_pos['long']['size']
+
+                if position.short_margin_previous == 0 and real_pos.get('short'):
+                    position.short_margin_previous = real_pos['short']['margin']
+                    position.short_size_previous = real_pos['short']['size']
+
                 # ✅ ÉVÉNEMENT 1: TP LONG EXÉCUTÉ
                 if self.detect_tp_long_executed(pair, position, real_pos):
                     self.handle_tp_long_executed(pair, position)
