@@ -1017,17 +1017,20 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # Endpoint et body (V2 - CORRECT!)
             endpoint = '/api/v2/mix/order/place-tpsl-order'
-            # Important: Size MUST match exactly what Bitget has in position
-            # Do NOT round - use size as-is (already an integer from API)
+            # Convert plan_type to Bitget format
+            # profit_plan → pos_profit, loss_plan → pos_loss
+            bitget_plan_type = 'pos_profit' if plan_type == 'profit_plan' else 'pos_loss'
+
             body = {
-                'symbol': symbol_bitget,
                 'marginCoin': 'USDT',
-                'productType': 'umcbl',  # REQUIS!
-                'planType': plan_type,  # 'profit_plan' ou 'loss_plan'
+                'productType': 'USDT-FUTURES',
+                'symbol': symbol_bitget,
+                'planType': bitget_plan_type,  # ← Must be 'pos_profit' or 'pos_loss', NOT 'profit_plan'!
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
+                'executePrice': '0',
                 'holdSide': hold_side,
-                'size': str(int(size))  # Convert to int, no rounding
+                'size': str(int(size))
             }
             body_json = json.dumps(body)
 
