@@ -2348,7 +2348,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 fibo_long_detected = self.detect_fibo_long_executed(pair, position, real_pos)
                 if fibo_long_detected:
                     print(f"[{iteration}] 🟡🟡🟡 FIBO LONG DÉTECTÉ - DÉCLENCHER HANDLER! 🟡🟡🟡")
-                    self.handle_fibo_long_executed(pair, position, position.long_size_previous, real_pos['long']['size'])
+                    self.handle_fib_long_executed(pair, position, position.long_size_previous, real_pos['long']['size'])
                     position.long_size_previous = real_pos['long']['size']
                     time.sleep(1)
                     self.send_position_message(pair, position)
@@ -2358,7 +2358,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 fibo_short_detected = self.detect_fibo_short_executed(pair, position, real_pos)
                 if fibo_short_detected:
                     print(f"[{iteration}] 🟡🟡🟡 FIBO SHORT DÉTECTÉ - DÉCLENCHER HANDLER! 🟡🟡🟡")
-                    self.handle_fibo_short_executed(pair, position, position.short_size_previous, real_pos['short']['size'])
+                    self.handle_fib_short_executed(pair, position, position.short_size_previous, real_pos['short']['size'])
                     position.short_size_previous = real_pos['short']['size']
                     time.sleep(1)
                     self.send_position_message(pair, position)
