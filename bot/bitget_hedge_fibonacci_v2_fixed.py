@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-🧪 Bitget Hedge Fibonacci Bot V3 - TEST LOCAL SIMPLIFIÉ
+🤖 Bitget Hedge Fibonacci Bot V2 Fixed - PRODUCTION
 
-Stratégie: Hedge permanent avec TP/Fibo à 0.1%
-- TP: 0.1% (au lieu de 1%)
-- Fibo niveau 1: 0.1% (au lieu de 1%)
-- Tests locaux uniquement
-- Pas de Telegram
-- Logs debug détaillés
+Stratégie: Hedge permanent avec TP/Fibo à 0.3%
+- TP: 0.3% (optimal pour DOGE)
+- Fibo niveau 1: 0.1%
+- Notifications Telegram
+- Handlers robustes avec try/except
+- Retry automatique pour ordres TP
 """
 
 import ccxt
 import time
 import os
 import logging
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -22,7 +23,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(f'logs/bot_v3_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+        logging.FileHandler(f'logs/bot_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
         logging.StreamHandler()
     ]
 )
@@ -58,12 +59,12 @@ class Position:
         self.fib_levels = [0.1, 0.2, 0.4, 0.7, 1.2, 2.0, 3.5]  # 0.1%, 0.2%, 0.4%...
 
 
-class BitgetHedgeBotV3:
-    """Simplified bot for local testing with 0.1% TP/Fibo levels"""
+class BitgetHedgeBotV2Fixed:
+    """Production bot with Telegram notifications and 0.3% TP"""
 
     def __init__(self):
         logger.info("="*80)
-        logger.info("🧪 BITGET HEDGE BOT V3 - TEST LOCAL (TP/Fibo 0.1%)")
+        logger.info("🤖 BITGET HEDGE BOT V2 FIXED - PRODUCTION (TP 0.3%)")
         logger.info("="*80)
 
         # API credentials
@@ -71,10 +72,18 @@ class BitgetHedgeBotV3:
         self.api_secret = os.getenv('BITGET_SECRET')
         self.api_password = os.getenv('BITGET_PASSPHRASE')
 
+        # Telegram credentials
+        self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
         if not all([self.api_key, self.api_secret, self.api_password]):
             raise ValueError("Missing API credentials in .env")
 
         logger.info(f"✅ API credentials loaded")
+        if self.telegram_token and self.telegram_chat_id:
+            logger.info(f"✅ Telegram configured")
+        else:
+            logger.warning(f"⚠️ Telegram not configured (will run without notifications)")
 
         # Exchange setup
         self.exchange = ccxt.bitget({
@@ -95,17 +104,87 @@ class BitgetHedgeBotV3:
         self.LEVERAGE = 50
 
         # TP and Fibo levels
-        self.TP_PERCENT = 0.1  # 0.1% TP
+        self.TP_PERCENT = 0.3  # 0.3% TP (optimal pour DOGE)
         self.FIBO_LEVELS = [0.1, 0.2, 0.4, 0.7, 1.2]  # First level: 0.1%
 
         # Position tracking
         self.position = Position(self.PAIR)
+
+        # Telegram updates tracking
+        self.last_telegram_update_id = 0
+        self.telegram_check_interval = 5  # Check toutes les 5 secondes
+        self.last_telegram_check = 0
 
         logger.info(f"Paire: {self.PAIR}")
         logger.info(f"TP: {self.TP_PERCENT}%")
         logger.info(f"Fibo levels: {self.FIBO_LEVELS}")
         logger.info(f"Initial margin: ${self.INITIAL_MARGIN}")
         logger.info(f"Leverage: {self.LEVERAGE}x")
+
+    def send_telegram(self, message):
+        """Envoie message Telegram"""
+        if not self.telegram_token or not self.telegram_chat_id:
+            return False
+
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        data = {
+            "chat_id": self.telegram_chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+
+        try:
+            response = requests.post(url, data=data, timeout=10)
+            return response.status_code == 200
+        except:
+            return False
+
+    def send_detailed_position_update(self, pair):
+        """
+        Envoie des messages Telegram détaillés pour les positions
+        """
+        try:
+            # Récupérer positions réelles depuis API
+            real_pos = self.get_real_positions()
+            if not real_pos:
+                return
+
+            # MESSAGE POUR POSITION LONG
+            if real_pos.get('long'):
+                long_data = real_pos['long']
+                current_price = self.get_price()
+                pnl_pct = ((current_price - long_data['entry_price']) / long_data['entry_price']) * 100
+
+                message_long = [f"🟢 <b>POSITION LONG - {pair.split('/')[0]}</b>"]
+                message_long.append("━━━━━━━━━━━━━━━━━━")
+                message_long.append(f"📊 <b>Position Actuelle:</b>")
+                message_long.append(f"• Contrats: {long_data['size']:.0f}")
+                message_long.append(f"• Entrée: ${long_data['entry_price']:.5f}")
+                message_long.append(f"• Prix actuel: ${current_price:.5f}")
+                message_long.append(f"• PnL: {long_data['pnl']:.7f} USDT ({pnl_pct:.2f}%)")
+                message_long.append(f"• Niveau Fib: {self.position.long_fib_level}")
+                message_long.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                self.send_telegram("\n".join(message_long))
+
+            # MESSAGE POUR POSITION SHORT
+            if real_pos.get('short'):
+                short_data = real_pos['short']
+                current_price = self.get_price()
+                pnl_pct = ((short_data['entry_price'] - current_price) / short_data['entry_price']) * 100
+
+                message_short = [f"🔴 <b>POSITION SHORT - {pair.split('/')[0]}</b>"]
+                message_short.append("━━━━━━━━━━━━━━━━━━")
+                message_short.append(f"📊 <b>Position Actuelle:</b>")
+                message_short.append(f"• Contrats: {short_data['size']:.0f}")
+                message_short.append(f"• Entrée: ${short_data['entry_price']:.5f}")
+                message_short.append(f"• Prix actuel: ${current_price:.5f}")
+                message_short.append(f"• PnL: {short_data['pnl']:.7f} USDT ({pnl_pct:.2f}%)")
+                message_short.append(f"• Niveau Fib: {self.position.short_fib_level}")
+                message_short.append(f"\n⏰ {datetime.now().strftime('%H:%M:%S')}")
+                self.send_telegram("\n".join(message_short))
+
+        except Exception as e:
+            logger.error(f"Erreur send_detailed_position_update: {e}")
 
     def cleanup_all(self):
         """Clean all positions and orders with retry loop"""
@@ -492,6 +571,9 @@ class BitgetHedgeBotV3:
         logger.info("🔔 TP LONG EXÉCUTÉ - HANDLER START")
         logger.info("🔔"*40)
 
+        # Notification Telegram
+        self.send_telegram(f"✅ <b>TP LONG TOUCHÉ - {self.PAIR.split('/')[0]}</b>\n\nRéouverture en cours...")
+
         try:
             # 1. Cancel LIMIT LONG (ignore errors)
             logger.info("\n[1/4] Annulation LIMIT LONG...")
@@ -565,6 +647,9 @@ class BitgetHedgeBotV3:
 
             logger.info("\n✅ TP LONG HANDLER TERMINÉ\n")
 
+            # Notification finale avec détails
+            self.send_detailed_position_update(self.PAIR)
+
         except Exception as e:
             logger.error(f"❌ Erreur handle_tp_long: {e}")
             import traceback
@@ -577,6 +662,9 @@ class BitgetHedgeBotV3:
         logger.info("\n" + "🔔"*40)
         logger.info("🔔 TP SHORT EXÉCUTÉ - HANDLER START")
         logger.info("🔔"*40)
+
+        # Notification Telegram
+        self.send_telegram(f"✅ <b>TP SHORT TOUCHÉ - {self.PAIR.split('/')[0]}</b>\n\nRéouverture en cours...")
 
         try:
             # 1. Cancel LIMIT SHORT (ignore errors)
@@ -651,6 +739,9 @@ class BitgetHedgeBotV3:
 
             logger.info("\n✅ TP SHORT HANDLER TERMINÉ\n")
 
+            # Notification finale avec détails
+            self.send_detailed_position_update(self.PAIR)
+
         except Exception as e:
             logger.error(f"❌ Erreur handle_tp_short: {e}")
             import traceback
@@ -663,6 +754,9 @@ class BitgetHedgeBotV3:
         logger.info("\n" + "⚡"*40)
         logger.info("⚡ FIBO LONG EXÉCUTÉ - HANDLER START")
         logger.info("⚡"*40)
+
+        # Notification Telegram
+        self.send_telegram(f"📉 <b>FIBO LONG TOUCHÉ - {self.PAIR.split('/')[0]}</b>\n\nDoublement position...")
 
         try:
             # 1. Cancel old orders (ignore errors if already gone)
@@ -735,6 +829,9 @@ class BitgetHedgeBotV3:
 
             logger.info("\n✅ FIBO LONG HANDLER TERMINÉ\n")
 
+            # Notification finale avec détails
+            self.send_detailed_position_update(self.PAIR)
+
         except Exception as e:
             logger.error(f"❌ Erreur handle_fibo_long: {e}")
             import traceback
@@ -747,6 +844,9 @@ class BitgetHedgeBotV3:
         logger.info("\n" + "⚡"*40)
         logger.info("⚡ FIBO SHORT EXÉCUTÉ - HANDLER START")
         logger.info("⚡"*40)
+
+        # Notification Telegram
+        self.send_telegram(f"📈 <b>FIBO SHORT TOUCHÉ - {self.PAIR.split('/')[0]}</b>\n\nDoublement position...")
 
         try:
             # 1. Cancel old orders (ignore errors if already gone)
@@ -819,10 +919,344 @@ class BitgetHedgeBotV3:
 
             logger.info("\n✅ FIBO SHORT HANDLER TERMINÉ\n")
 
+            # Notification finale avec détails
+            self.send_detailed_position_update(self.PAIR)
+
         except Exception as e:
             logger.error(f"❌ Erreur handle_fibo_short: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def get_telegram_updates(self):
+        """Récupère les nouveaux messages Telegram (commandes)"""
+        if not self.telegram_token:
+            return []
+
+        url = f"https://api.telegram.org/bot{self.telegram_token}/getUpdates"
+        params = {'offset': self.last_telegram_update_id + 1, 'timeout': 0}
+
+        try:
+            response = requests.get(url, params=params, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('ok') and data.get('result'):
+                    return data['result']
+        except:
+            pass
+
+        return []
+
+    def check_telegram_updates(self):
+        """Check for new Telegram commands"""
+        updates = self.get_telegram_updates()
+
+        for update in updates:
+            self.last_telegram_update_id = update['update_id']
+
+            if 'message' in update and 'text' in update['message']:
+                text = update['message']['text'].strip()
+
+                if text.startswith('/'):
+                    logger.info(f"📱 Commande Telegram reçue: {text}")
+                    self.handle_telegram_command(text)
+
+    def handle_telegram_command(self, command):
+        """Traite les commandes Telegram"""
+        try:
+            # Séparer commande et arguments
+            parts = command.split()
+            cmd = parts[0].lower()
+            args = parts[1:] if len(parts) > 1 else []
+
+            if cmd == '/pnl':
+                self.cmd_pnl()
+            elif cmd == '/status':
+                self.cmd_status()
+            elif cmd == '/setmargin':
+                self.cmd_setmargin(args)
+            elif cmd == '/settp':
+                self.cmd_settp(args)
+            elif cmd == '/setfibo':
+                self.cmd_setfibo(args)
+            elif cmd == '/stop':
+                self.cmd_stop(args)
+            elif cmd == '/help':
+                self.cmd_help()
+            else:
+                self.send_telegram(f"❌ Commande inconnue: {cmd}\nTapez /help pour voir les commandes disponibles")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement commande {command}: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
+
+    def cmd_pnl(self):
+        """Commande /pnl - Affiche P&L total"""
+        try:
+            real_pos = self.get_real_positions()
+            current_price = self.get_price()
+
+            # PnL non réalisé
+            total_pnl = 0
+            margin_used = 0
+
+            if real_pos.get('long'):
+                long_pnl = real_pos['long']['pnl']
+                long_margin = real_pos['long']['margin']
+                total_pnl += long_pnl
+                margin_used += long_margin
+
+            if real_pos.get('short'):
+                short_pnl = real_pos['short']['pnl']
+                short_margin = real_pos['short']['margin']
+                total_pnl += short_pnl
+                margin_used += short_margin
+
+            message = f"""💰 <b>P&L - {self.PAIR.split('/')[0]}</b>
+
+📊 <b>Positions:</b>"""
+
+            if real_pos.get('long'):
+                entry_long = real_pos['long']['entry_price']
+                size_long = real_pos['long']['size']
+                pnl_long = real_pos['long']['pnl']
+                pnl_pct_long = ((current_price - entry_long) / entry_long) * 100
+                message += f"""
+🟢 LONG: {size_long:.0f} contrats
+   Entrée: ${entry_long:.5f}
+   PnL: {pnl_long:+.7f} USDT ({pnl_pct_long:+.2f}%)"""
+
+            if real_pos.get('short'):
+                entry_short = real_pos['short']['entry_price']
+                size_short = real_pos['short']['size']
+                pnl_short = real_pos['short']['pnl']
+                pnl_pct_short = ((entry_short - current_price) / entry_short) * 100
+                message += f"""
+🔴 SHORT: {size_short:.0f} contrats
+   Entrée: ${entry_short:.5f}
+   PnL: {pnl_short:+.7f} USDT ({pnl_pct_short:+.2f}%)"""
+
+            message += f"""
+
+━━━━━━━━━━━━━━━━━
+💎 <b>PnL Total: {total_pnl:+.7f} USDT</b>
+💵 Marge utilisée: {margin_used:.7f} USDT
+💰 Prix actuel: ${current_price:.5f}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+            self.send_telegram(message)
+
+        except Exception as e:
+            logger.error(f"Erreur /pnl: {e}")
+            self.send_telegram(f"❌ Erreur /pnl: {e}")
+
+    def cmd_status(self):
+        """Commande /status - État du bot"""
+        try:
+            real_pos = self.get_real_positions()
+            current_price = self.get_price()
+
+            # Compter les ordres actifs
+            open_orders = self.exchange.fetch_open_orders(symbol=self.PAIR)
+            tp_orders = [o for o in open_orders if 'profit' in o.get('info', {}).get('planType', '').lower()]
+            limit_orders = [o for o in open_orders if o['type'] == 'limit']
+
+            message = f"""🤖 <b>STATUS BOT - {self.PAIR.split('/')[0]}</b>
+
+📊 <b>Positions:</b>"""
+
+            if real_pos.get('long'):
+                size_long = real_pos['long']['size']
+                entry_long = real_pos['long']['entry_price']
+                message += f"""
+🟢 LONG: {size_long:.0f} @ ${entry_long:.5f}
+   Niveau Fib: {self.position.long_fib_level}"""
+
+            if real_pos.get('short'):
+                size_short = real_pos['short']['size']
+                entry_short = real_pos['short']['entry_price']
+                message += f"""
+🔴 SHORT: {size_short:.0f} @ ${entry_short:.5f}
+   Niveau Fib: {self.position.short_fib_level}"""
+
+            message += f"""
+
+📋 <b>Ordres actifs:</b>
+• TP orders: {len(tp_orders)}
+• LIMIT orders: {len(limit_orders)}
+
+⚙️ <b>Configuration:</b>
+• TP: {self.TP_PERCENT}%
+• Fibo levels: {self.FIBO_LEVELS}
+• Marge initiale: ${self.INITIAL_MARGIN}
+• Levier: {self.LEVERAGE}x
+
+💰 Prix actuel: ${current_price:.5f}
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+            self.send_telegram(message)
+
+        except Exception as e:
+            logger.error(f"Erreur /status: {e}")
+            self.send_telegram(f"❌ Erreur /status: {e}")
+
+    def cmd_setmargin(self, args):
+        """Commande /setmargin <montant> - Change INITIAL_MARGIN"""
+        try:
+            if not args:
+                self.send_telegram("❌ Usage: /setmargin <montant>\n\nExemple: /setmargin 2")
+                return
+
+            new_margin = float(args[0])
+
+            if new_margin <= 0:
+                self.send_telegram("❌ Le montant doit être > 0")
+                return
+
+            old_margin = self.INITIAL_MARGIN
+            self.INITIAL_MARGIN = new_margin
+
+            message = f"""✅ <b>MARGE MODIFIÉE</b>
+
+Ancienne marge: ${old_margin}
+Nouvelle marge: ${new_margin}
+
+⚠️ La modification s'appliquera aux PROCHAINES positions ouvertes.
+Les positions actuelles ne sont pas affectées.
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+            self.send_telegram(message)
+            logger.info(f"💰 INITIAL_MARGIN modifié: ${old_margin} → ${new_margin}")
+
+        except ValueError:
+            self.send_telegram("❌ Montant invalide. Utilisez un nombre (ex: 2)")
+        except Exception as e:
+            logger.error(f"Erreur /setmargin: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
+
+    def cmd_settp(self, args):
+        """Commande /settp <pourcent> - Change TP_PERCENT"""
+        try:
+            if not args:
+                self.send_telegram("❌ Usage: /settp <pourcent>\n\nExemple: /settp 0.5")
+                return
+
+            new_tp = float(args[0])
+
+            if new_tp < 0.1 or new_tp > 2.0:
+                self.send_telegram("❌ TP doit être entre 0.1% et 2%")
+                return
+
+            old_tp = self.TP_PERCENT
+            self.TP_PERCENT = new_tp
+
+            message = f"""✅ <b>TP MODIFIÉ</b>
+
+Ancien TP: {old_tp}%
+Nouveau TP: {new_tp}%
+
+⚠️ La modification s'appliquera aux PROCHAINS ordres TP.
+Les ordres TP actuels ne sont pas modifiés.
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+            self.send_telegram(message)
+            logger.info(f"📊 TP_PERCENT modifié: {old_tp}% → {new_tp}%")
+
+        except ValueError:
+            self.send_telegram("❌ Valeur invalide. Utilisez un nombre décimal (ex: 0.5)")
+        except Exception as e:
+            logger.error(f"Erreur /settp: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
+
+    def cmd_setfibo(self, args):
+        """Commande /setfibo <niveaux> - Change FIBO_LEVELS"""
+        try:
+            if not args:
+                self.send_telegram(f"❌ Usage: /setfibo <niveaux séparés par virgule>\n\nExemple: /setfibo 0.3,0.6,1.2\n\nNiveaux actuels: {self.FIBO_LEVELS}")
+                return
+
+            # Parse niveaux
+            levels_str = args[0].replace(' ', '')
+            new_levels = [float(x) for x in levels_str.split(',')]
+
+            # Validation: niveaux croissants
+            if new_levels != sorted(new_levels):
+                self.send_telegram("❌ Les niveaux doivent être en ordre croissant")
+                return
+
+            if len(new_levels) < 2:
+                self.send_telegram("❌ Il faut au moins 2 niveaux")
+                return
+
+            old_levels = self.FIBO_LEVELS
+            self.FIBO_LEVELS = new_levels
+
+            message = f"""✅ <b>NIVEAUX FIBO MODIFIÉS</b>
+
+Anciens niveaux: {old_levels}
+Nouveaux niveaux: {new_levels}
+
+⚠️ La modification s'appliquera aux PROCHAINS ordres LIMIT.
+Les ordres LIMIT actuels ne sont pas modifiés.
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+            self.send_telegram(message)
+            logger.info(f"📐 FIBO_LEVELS modifié: {old_levels} → {new_levels}")
+
+        except ValueError:
+            self.send_telegram("❌ Format invalide. Utilisez des nombres séparés par virgule (ex: 0.3,0.6,1.2)")
+        except Exception as e:
+            logger.error(f"Erreur /setfibo: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
+
+    def cmd_stop(self, args):
+        """Commande /stop - Arrête le bot"""
+        if not args or args[0].upper() != 'CONFIRM':
+            message = """⚠️ <b>ARRÊT DU BOT</b>
+
+Cette commande va arrêter le bot.
+
+⚠️ Les positions resteront ouvertes!
+
+Pour confirmer, tapez:
+/stop CONFIRM"""
+            self.send_telegram(message)
+            return
+
+        try:
+            self.send_telegram("🛑 <b>BOT ARRÊTÉ</b>\n\nArrêt en cours...")
+            logger.info("🛑 Arrêt demandé via /stop CONFIRM")
+            time.sleep(2)
+            import sys
+            sys.exit(0)
+
+        except Exception as e:
+            logger.error(f"Erreur /stop: {e}")
+            self.send_telegram(f"❌ Erreur: {e}")
+
+    def cmd_help(self):
+        """Commande /help - Liste des commandes"""
+        message = """🤖 <b>COMMANDES DISPONIBLES</b>
+
+📊 <b>Informations:</b>
+/pnl - P&L total et positions
+/status - État du bot et ordres
+
+⚙️ <b>Configuration:</b>
+/setmargin &lt;montant&gt; - Changer marge initiale
+/settp &lt;pourcent&gt; - Changer TP %
+/setfibo &lt;niveaux&gt; - Changer niveaux Fibo
+
+🛠️ <b>Contrôle:</b>
+/stop - Arrêter le bot (demande confirmation)
+
+❓ /help - Cette aide"""
+
+        self.send_telegram(message)
 
     def check_events(self):
         """Check for TP/Fibo execution events"""
@@ -862,7 +1296,19 @@ class BitgetHedgeBotV3:
 
     def run(self):
         """Main loop"""
-        logger.info("\n🎬 DÉMARRAGE BOT V3...\n")
+        logger.info("\n🎬 DÉMARRAGE BOT V2 FIXED...\n")
+
+        # Notification démarrage
+        startup_msg = f"""🤖 <b>BOT V2 FIXED DÉMARRÉ</b>
+
+📊 Config:
+• Paire: {self.PAIR.split('/')[0]}
+• TP: {self.TP_PERCENT}%
+• Fibo: {self.FIBO_LEVELS[0]}%
+• Levier: {self.LEVERAGE}x
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+        self.send_telegram(startup_msg)
 
         # Cleanup with verification
         cleanup_ok = self.cleanup_all()
@@ -897,6 +1343,12 @@ class BitgetHedgeBotV3:
                     logger.info("⏸️  Événement traité, pause 3s...")
                     time.sleep(3)
 
+                # Check Telegram commands every 5 seconds
+                current_time = time.time()
+                if current_time - self.last_telegram_check >= self.telegram_check_interval:
+                    self.check_telegram_updates()
+                    self.last_telegram_check = current_time
+
                 # Log every 40 iterations (= every 10 seconds)
                 if iteration % 40 == 0:
                     real_pos = self.get_real_positions()
@@ -915,7 +1367,7 @@ class BitgetHedgeBotV3:
 
 if __name__ == "__main__":
     try:
-        bot = BitgetHedgeBotV3()
+        bot = BitgetHedgeBotV2Fixed()
         bot.run()
     except Exception as e:
         logger.error(f"❌ Erreur fatale: {e}")
