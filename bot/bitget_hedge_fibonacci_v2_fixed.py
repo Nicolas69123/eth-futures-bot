@@ -2,9 +2,10 @@
 """
 🤖 Bitget Hedge Fibonacci Bot V2 Fixed - PRODUCTION
 
-Stratégie: Hedge permanent avec TP/Fibo à 0.3%
-- TP: 0.3% (optimal pour DOGE)
-- Fibo niveau 1: 0.1%
+Stratégie: Hedge permanent avec TP/Fibo optimisés
+- TP: 0.5%
+- Fibo niveau 1: 0.3%
+- Marge initiale: 5 USDT
 - Notifications Telegram
 - Handlers robustes avec try/except
 - Retry automatique pour ordres TP
@@ -56,15 +57,15 @@ class Position:
         }
 
         # Fibonacci levels (%)
-        self.fib_levels = [0.1, 0.2, 0.4, 0.7, 1.2, 2.0, 3.5]  # 0.1%, 0.2%, 0.4%...
+        self.fib_levels = [0.3, 0.6, 1.0, 1.5, 2.0, 3.0, 5.0]  # 0.3%, 0.6%, 1.0%...
 
 
 class BitgetHedgeBotV2Fixed:
-    """Production bot with Telegram notifications and 0.3% TP"""
+    """Production bot with Telegram notifications and 0.5% TP"""
 
     def __init__(self):
         logger.info("="*80)
-        logger.info("🤖 BITGET HEDGE BOT V2 FIXED - PRODUCTION (TP 0.3%)")
+        logger.info("🤖 BITGET HEDGE BOT V2 FIXED - PRODUCTION (TP 0.5% | Fibo 0.3%)")
         logger.info("="*80)
 
         # API credentials
@@ -100,12 +101,12 @@ class BitgetHedgeBotV2Fixed:
 
         # Parameters
         self.PAIR = 'DOGE/USDT:USDT'
-        self.INITIAL_MARGIN = 1  # $1 par position
+        self.INITIAL_MARGIN = 5  # $5 par position
         self.LEVERAGE = 50
 
         # TP and Fibo levels
-        self.TP_PERCENT = 0.3  # 0.3% TP (optimal pour DOGE)
-        self.FIBO_LEVELS = [0.1, 0.2, 0.4, 0.7, 1.2]  # First level: 0.1%
+        self.TP_PERCENT = 0.5  # 0.5% TP
+        self.FIBO_LEVELS = [0.3, 0.6, 1.0, 1.5, 2.0]  # First level: 0.3%
 
         # Position tracking
         self.position = Position(self.PAIR)
