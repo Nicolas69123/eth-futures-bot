@@ -1310,12 +1310,21 @@ Pour confirmer, tapez:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         self.send_telegram(startup_msg)
 
-        # Cleanup with verification
-        cleanup_ok = self.cleanup_all()
-        if not cleanup_ok:
-            logger.error("❌ CLEANUP ÉCHOUÉ - BOT ARRÊTÉ POUR SÉCURITÉ")
-            logger.error("   Vérifiez manuellement sur Bitget et fermez les positions restantes")
-            return
+        # Cleanup with verification (skip if SKIP_CLEANUP=1)
+        skip_cleanup = os.getenv('SKIP_CLEANUP', '0') == '1'
+
+        if skip_cleanup:
+            logger.warning("⚠️ CLEANUP SKIPPED (SKIP_CLEANUP=1 dans .env)")
+            logger.warning("   Assurez-vous que le compte est propre ou positions gérées!")
+            self.send_telegram("⚠️ <b>CLEANUP SKIPPED</b>\n\nBot démarre sans nettoyer le compte")
+        else:
+            cleanup_ok = self.cleanup_all()
+            if not cleanup_ok:
+                logger.error("❌ CLEANUP ÉCHOUÉ - BOT ARRÊTÉ POUR SÉCURITÉ")
+                logger.error("   Vérifiez manuellement sur Bitget et fermez les positions restantes")
+                logger.error("   OU ajoutez SKIP_CLEANUP=1 dans .env pour forcer le démarrage")
+                self.send_telegram("❌ <b>CLEANUP ÉCHOUÉ</b>\n\nBot arrêté. Vérifiez Bitget manuellement.")
+                return
 
         time.sleep(3)
 
