@@ -2994,8 +2994,21 @@ Erreurs totales: {self.error_count}
             # Boucle
             iteration = 0
             while True:
-                # DEBUG: Afficher prix en temps réel
-                if self.active_positions:
+                loop_start = time.time()
+
+                # ✅ PRIORITÉ 1: DÉTECTION TP/FIBO (CRITIQUE - CHAQUE SECONDE)
+                self.check_orders_status(iteration)
+
+                # ✅ PRIORITÉ 2: COMMANDES TELEGRAM (toutes les 2 secondes)
+                if iteration % 2 == 0:
+                    self.check_telegram_commands()
+
+                # ✅ PRIORITÉ 3: HEALTH CHECK (toutes les 60 secondes)
+                if iteration % 60 == 0:
+                    self.perform_health_check()
+
+                # 📊 DEBUG: Afficher prix en temps réel (toutes les 30 secondes seulement)
+                if iteration % 30 == 0 and self.active_positions:
                     print(f"\n{'='*80}")
                     print(f"🔍 DEBUG - Itération {iteration} - {datetime.now().strftime('%H:%M:%S')}")
                     print(f"{'='*80}")
@@ -3034,25 +3047,14 @@ Erreurs totales: {self.error_count}
                                 print(f"      Trigger TP: -{next_trigger}% (Fib {position.short_fib_level + 1})")
                                 print(f"      Distance trigger: {(abs(change_pct) - next_trigger):.4f}%")
 
-                # Vérifier ordres exécutés
-                self.check_orders_status(iteration)
-
-                # Vérifier commandes Telegram (toutes les 2 secondes)
-                if iteration % 2 == 0:
-                    self.check_telegram_commands()
-
-                # VÉRIFICATION AUTOMATIQUE DE SANTÉ (toutes les 60 secondes)
-                self.perform_health_check()
-
-                # Status Telegram (désactivé car remplacé par health check)
-                # self.send_status_telegram()
-
-                # Status console
-                if iteration % 30 == 0 and self.active_positions:
                     print(f"\n📊 {len(self.active_positions)} positions actives | Capital: ${self.capital_used}/${self.MAX_CAPITAL}")
 
                 iteration += 1
-                time.sleep(1)
+
+                # ⏱️ Assurer une itération par seconde exacte
+                loop_time = time.time() - loop_start
+                sleep_time = max(0.1, 1.0 - loop_time)  # Min 0.1s pour éviter CPU 100%
+                time.sleep(sleep_time)
 
         except KeyboardInterrupt:
             print("\n✋ Arrêt")
