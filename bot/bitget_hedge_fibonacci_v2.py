@@ -1028,6 +1028,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             }
             body_json = json.dumps(body)
 
+            # DEBUG: Log le body envoyé
+            print(f"🔍 DEBUG TP/SL: endpoint={endpoint}, body={body}")
+
             # Timestamp et signature
             timestamp = str(int(time.time() * 1000))
             signature = self.bitget_sign_request(timestamp, 'POST', endpoint, body_json)
@@ -1053,7 +1056,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 print(f"✅ TP/SL {plan_type} placé: ID {order_id}")
                 return {'id': order_id, 'info': data}
             else:
-                print(f"❌ Erreur TP/SL API: {data}")
+                print(f"❌ Erreur TP/SL API ({data.get('code')}): {data.get('msg')}")
                 return None
 
         except Exception as e:
