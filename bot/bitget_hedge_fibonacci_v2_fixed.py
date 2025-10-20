@@ -386,18 +386,16 @@ class BitgetHedgeBotV2Fixed:
 
     def open_initial_hedge(self):
         """
-        Open initial hedge: LONG + SHORT + 4 orders
+        Open initial hedge: LONG + SHORT + 2 TP orders ONLY
 
         Orders created:
         1. LONG market
         2. SHORT market
-        3. TP LONG (0.1%)
-        4. TP SHORT (0.1%)
-        5. LIMIT BUY (doubler LONG si prix -0.1%)
-        6. LIMIT SELL (doubler SHORT si prix +0.1%)
+        3. TP LONG
+        4. TP SHORT
         """
         logger.info("\n" + "="*80)
-        logger.info("🚀 OUVERTURE HEDGE INITIAL")
+        logger.info("🚀 OUVERTURE HEDGE INITIAL (2 TP SEULEMENT)")
         logger.info("="*80)
 
         try:
@@ -410,7 +408,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"Size calculée: {size:.1f} contrats (${notional} notional)")
 
             # 1. Open LONG market
-            logger.info("\n[1/6] Ouverture LONG MARKET...")
+            logger.info("\n[1/4] Ouverture LONG MARKET...")
             long_order = self.exchange.create_order(
                 symbol=self.PAIR, type='market', side='buy', amount=size,
                 params={'tradeSide': 'open', 'holdSide': 'long'}
@@ -418,7 +416,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"   ✅ LONG ouvert: {long_order['id']}")
 
             # 2. Open SHORT market
-            logger.info("\n[2/6] Ouverture SHORT MARKET...")
+            logger.info("\n[2/4] Ouverture SHORT MARKET...")
             short_order = self.exchange.create_order(
                 symbol=self.PAIR, type='market', side='sell', amount=size,
                 params={'tradeSide': 'open', 'holdSide': 'short'}
@@ -464,7 +462,7 @@ class BitgetHedgeBotV2Fixed:
             logger.info(f"   Fibo Short: ${fibo_short_price:.5f} (+{self.FIBO_LEVELS[0]}%)")
 
             # 3. Place TP LONG
-            logger.info("\n[3/6] Placement TP LONG...")
+            logger.info("\n[3/4] Placement TP LONG...")
             time.sleep(2)
             tp_long = self.place_tpsl_order(
                 trigger_price=tp_long_price,
@@ -477,7 +475,7 @@ class BitgetHedgeBotV2Fixed:
                 logger.info(f"   ✅ TP Long: {tp_long['id']}")
 
             # 4. Place TP SHORT
-            logger.info("\n[4/6] Placement TP SHORT...")
+            logger.info("\n[4/4] Placement TP SHORT...")
             time.sleep(2)
             tp_short = self.place_tpsl_order(
                 trigger_price=tp_short_price,
@@ -489,34 +487,13 @@ class BitgetHedgeBotV2Fixed:
                 self.position.orders['tp_short'] = tp_short['id']
                 logger.info(f"   ✅ TP Short: {tp_short['id']}")
 
-            # 5. Place LIMIT BUY (doubler LONG si prix baisse)
-            logger.info("\n[5/6] Placement LIMIT BUY (Fibo Long)...")
-            time.sleep(1)
-            fibo_long = self.exchange.create_order(
-                symbol=self.PAIR, type='limit', side='buy', amount=size_long * 2,
-                price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-            )
-            self.position.orders['double_long'] = fibo_long['id']
-            logger.info(f"   ✅ LIMIT BUY: {fibo_long['id']} - {size_long * 2:.0f} @ ${fibo_long_price:.5f}")
-
-            # 6. Place LIMIT SELL (doubler SHORT si prix monte)
-            logger.info("\n[6/6] Placement LIMIT SELL (Fibo Short)...")
-            time.sleep(1)
-            fibo_short = self.exchange.create_order(
-                symbol=self.PAIR, type='limit', side='sell', amount=size_short * 2,
-                price=fibo_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
-            )
-            self.position.orders['double_short'] = fibo_short['id']
-            logger.info(f"   ✅ LIMIT SELL: {fibo_short['id']} - {size_short * 2:.0f} @ ${fibo_short_price:.5f}")
-
             logger.info("\n" + "="*80)
             logger.info("✅ HEDGE INITIAL COMPLET!")
             logger.info("="*80)
             logger.info(f"📊 Résumé:")
             logger.info(f"   Positions: LONG {size_long:.0f} + SHORT {size_short:.0f}")
-            logger.info(f"   Ordres TP: 2")
-            logger.info(f"   Ordres LIMIT: 2")
-            logger.info(f"   Total: 2 positions + 4 ordres")
+            logger.info(f"   Ordres TP: 2 SEULEMENT")
+            logger.info(f"   Total: 2 positions + 2 ordres TP")
 
             return True
 
@@ -1322,21 +1299,14 @@ Pour confirmer, tapez:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         self.send_telegram(startup_msg)
 
-        # Cleanup with verification (skip if SKIP_CLEANUP=1)
-        skip_cleanup = os.getenv('SKIP_CLEANUP', '0') == '1'
-
-        if skip_cleanup:
-            logger.warning("⚠️ CLEANUP SKIPPED (SKIP_CLEANUP=1 dans .env)")
-            logger.warning("   Assurez-vous que le compte est propre ou positions gérées!")
-            self.send_telegram("⚠️ <b>CLEANUP SKIPPED</b>\n\nBot démarre sans nettoyer le compte")
-        else:
-            cleanup_ok = self.cleanup_all()
-            if not cleanup_ok:
-                logger.error("❌ CLEANUP ÉCHOUÉ - BOT ARRÊTÉ POUR SÉCURITÉ")
-                logger.error("   Vérifiez manuellement sur Bitget et fermez les positions restantes")
-                logger.error("   OU ajoutez SKIP_CLEANUP=1 dans .env pour forcer le démarrage")
-                self.send_telegram("❌ <b>CLEANUP ÉCHOUÉ</b>\n\nBot arrêté. Vérifiez Bitget manuellement.")
-                return
+        # CLEANUP AUTOMATIQUE OBLIGATOIRE AU DÉMARRAGE
+        logger.info("\n🧹 CLEANUP AUTOMATIQUE AU DÉMARRAGE...")
+        cleanup_ok = self.cleanup_all()
+        if not cleanup_ok:
+            logger.error("❌ CLEANUP ÉCHOUÉ - BOT ARRÊTÉ POUR SÉCURITÉ")
+            logger.error("   Vérifiez manuellement sur Bitget et fermez les positions restantes")
+            self.send_telegram("❌ <b>CLEANUP ÉCHOUÉ</b>\n\nBot arrêté. Vérifiez Bitget manuellement.")
+            return
 
         time.sleep(3)
 
@@ -1383,7 +1353,15 @@ Pour confirmer, tapez:
 
         except KeyboardInterrupt:
             logger.info("\n\n⏹️  Arrêt demandé par utilisateur")
-            logger.info("Bot arrêté proprement.")
+            logger.info("🧹 CLEANUP AUTOMATIQUE AVANT ARRÊT...")
+            self.send_telegram("⏹️ <b>Bot arrêté par utilisateur</b>\n\n🧹 Cleanup en cours...")
+            cleanup_ok = self.cleanup_all()
+            if cleanup_ok:
+                logger.info("✅ Bot arrêté proprement - Compte nettoyé!")
+                self.send_telegram("✅ <b>Bot arrêté proprement</b>\n\nCompte nettoyé (positions fermées + ordres annulés)")
+            else:
+                logger.warning("⚠️ Bot arrêté mais cleanup incomplet - Vérifiez Bitget!")
+                self.send_telegram("⚠️ <b>Bot arrêté mais cleanup incomplet</b>\n\nVérifiez Bitget manuellement!")
 
 
 if __name__ == "__main__":
