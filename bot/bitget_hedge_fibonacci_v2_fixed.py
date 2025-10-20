@@ -1214,13 +1214,14 @@ Les ordres LIMIT actuels ne sont pas modifiés.
             self.send_telegram(f"❌ Erreur: {e}")
 
     def cmd_stop(self, args):
-        """Commande /stop - Arrête le bot"""
+        """Commande /stop - Ferme TOUT et arrête le bot"""
         if not args or args[0].upper() != 'CONFIRM':
             message = """⚠️ <b>ARRÊT DU BOT</b>
 
-Cette commande va arrêter le bot.
-
-⚠️ Les positions resteront ouvertes!
+Cette commande va:
+1. Fermer TOUTES les positions
+2. Annuler TOUS les ordres
+3. Arrêter le bot
 
 Pour confirmer, tapez:
 /stop CONFIRM"""
@@ -1228,9 +1229,19 @@ Pour confirmer, tapez:
             return
 
         try:
-            self.send_telegram("🛑 <b>BOT ARRÊTÉ</b>\n\nArrêt en cours...")
+            self.send_telegram("🛑 <b>ARRÊT EN COURS...</b>\n\n1. Fermeture positions\n2. Annulation ordres\n3. Arrêt bot")
             logger.info("🛑 Arrêt demandé via /stop CONFIRM")
+
+            # 1. CLEANUP complet (fermer positions + annuler ordres)
+            logger.info("🧹 Cleanup avant arrêt...")
+            self.cleanup_all()
+
+            # 2. Message final
+            self.send_telegram("✅ <b>BOT ARRÊTÉ</b>\n\nPositions fermées\nOrdres annulés\nBot arrêté")
+            logger.info("✅ Cleanup terminé, arrêt bot")
             time.sleep(2)
+
+            # 3. Arrêt
             import sys
             sys.exit(0)
 
