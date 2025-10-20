@@ -253,8 +253,8 @@ class BitgetHedgeBotV2:
                 message_long.append(f"• Contrats: {long_data['size']:.0f}")
                 message_long.append(f"• Entrée: ${long_data['entry_price']:.5f}")
                 message_long.append(f"• Marge: {long_data['margin']:.7f} USDT")
-                message_long.append(f"• PnL: {long_data['pnl']:.7f} USDT ({long_data['pnl_pct']:.2f}%)")
-                message_long.append(f"• ROE: {long_data['roe']:.2f}%")
+                message_long.append(f"• PnL: {long_data['unrealized_pnl']:.7f} USDT ({long_data['pnl_percentage']:.2f}%)")
+                message_long.append(f"• ROE: {long_data['pnl_percentage']:.2f}%")
                 message_long.append(f"• Niveau Fib: {position.long_fib_level}")
 
                 # Info TP
@@ -303,8 +303,8 @@ class BitgetHedgeBotV2:
                 message_short.append(f"• Contrats: {short_data['size']:.0f}")
                 message_short.append(f"• Entrée: ${short_data['entry_price']:.5f}")
                 message_short.append(f"• Marge: {short_data['margin']:.7f} USDT")
-                message_short.append(f"• PnL: {short_data['pnl']:.7f} USDT ({short_data['pnl_pct']:.2f}%)")
-                message_short.append(f"• ROE: {short_data['roe']:.2f}%")
+                message_short.append(f"• PnL: {short_data['unrealized_pnl']:.7f} USDT ({short_data['pnl_percentage']:.2f}%)")
+                message_short.append(f"• ROE: {short_data['pnl_percentage']:.2f}%")
                 message_short.append(f"• Niveau Fib: {position.short_fib_level}")
 
                 # Info TP
@@ -1023,8 +1023,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             dict: Order data ou None
         """
         try:
-            # Convertir symbol au format Bitget
-            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+            # Convertir symbol au format Bitget (ex: DOGE/USDT:USDT → DOGEUSDT en majuscules)
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
 
             # Arrondir le prix selon les règles Bitget
             trigger_price_rounded = self.round_price(trigger_price, symbol)
@@ -1033,14 +1033,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             endpoint = '/api/v2/mix/order/place-tpsl-order'
             body = {
                 'marginCoin': 'USDT',
-                'productType': 'USDT-FUTURES',  # Majuscules
+                'productType': 'USDT-FUTURES',
                 'symbol': symbol_bitget,
-                'planType': 'pos_profit' if plan_type == 'profit_plan' else 'pos_loss',  # pos_profit au lieu de profit_plan
+                'planType': 'pos_profit' if plan_type == 'profit_plan' else 'pos_loss',
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
-                'executePrice': '0',  # 0 = ordre market au trigger
+                'executePrice': '0',
                 'holdSide': hold_side,
-                'size': str(int(size))
+                'size': str(round(size, 2))  # Arrondir à 2 décimales
             }
             body_json = json.dumps(body)
 
@@ -1394,7 +1394,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def cancel_tpsl_order(self, order_id, symbol):
         """Annule un ordre TP/SL plan"""
         try:
-            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')  # Majuscules (DOGEUSDT)
 
             endpoint = '/api/v2/mix/order/cancel-plan-order'
             body = {
@@ -1790,49 +1790,39 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
     def handle_tp_long_executed(self, pair, position):
         """
-        ÉVÉNEMENT 1: TP Long touché (position Long fermée)
-        Ordre: Annuler → MARKET → LIMIT → TP → Message
+        ✅ ÉVÉNEMENT 1: TP LONG EXÉCUTÉ
+
+        Actions (4 seulement):
+        1. Annuler FIBO LONG (l'ordre LIMIT de doublement)
+        2. Réouvrir Long en MARKET
+        3. Placer NOUVEAU TP Long
+        4. Placer NOUVEAU FIBO Long (Fib 1)
         """
-        logger.info(f"🔔 [{pair}] TP LONG EXÉCUTÉ")
-        print(f"\n{'='*80}")
-        print(f"🔔 TP LONG EXÉCUTÉ - {pair}")
-        print(f"{'='*80}")
+        logger.info(f"🔔 TP LONG EXÉCUTÉ - {pair}")
 
-        # 1. Annuler anciens ordres
-        if position.orders['tp_short']:
-            self.cancel_order(position.orders['tp_short'], pair)
-            position.orders['tp_short'] = None
-
-        if position.orders['double_long']:
-            self.cancel_order(position.orders['double_long'], pair)
-            position.orders['double_long'] = None
-
-        # 2. Ré-ouvrir Long MARKET
         try:
+            # ✅ 1. Annuler FIBO LONG (double_long LIMIT)
+            if position.orders.get('double_long'):
+                self.cancel_order(position.orders['double_long'], pair)
+                position.orders['double_long'] = None
+                logger.info(f"   ✓ Annulé Double Long LIMIT")
+
+            # ✅ 2. Réouvrir Long en MARKET
             current_price = self.get_price(pair)
             notional = self.INITIAL_MARGIN * self.LEVERAGE
             size_long = notional / current_price
 
-            logger.info(f"Ré-ouverture Long MARKET: {size_long:.4f} contrats")
             long_order = self.exchange.create_order(
                 symbol=pair, type='market', side='buy', amount=size_long,
                 params={'tradeSide': 'open', 'holdSide': 'long'}
             )
-            print(f"✅ Long réouvert: {size_long:.4f} @ {self.format_price(current_price, pair)}")
+            logger.info(f"   ✓ Réouvert Long MARKET @ {self.format_price(current_price, pair)}")
 
-            # Log événement réouverture
-            if hasattr(self, 'telegram_commands'):
-                self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                    'order_type': 'market',
-                    'side': 'long',
-                    'action': 'reopen_after_tp'
-                })
-
-            # 3. Attendre et récupérer position réelle
+            # Attendre puis récupérer position réelle
             time.sleep(2)
             real_pos = self.get_real_positions(pair)
             if not real_pos or not real_pos.get('long'):
-                logger.error("Impossible de récupérer Long après réouverture")
+                logger.error(f"❌ Impossible de récupérer Long après réouverture")
                 return
 
             entry_long = real_pos['long']['entry_price']
@@ -1840,31 +1830,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             position.entry_price_long = entry_long
             position.long_open = True
             position.long_fib_level = 0  # Réinitialisé à Fib 0
+            position.long_margin_previous = real_pos['long']['margin']  # Mettre à jour marge
 
-            logger.info(f"Long réouvert: {size_long_real:.0f} contrats @ ${entry_long:.5f}")
-
-            # 4. Placer Double Long (Fib 1) LIMIT
-            next_pct = position.fib_levels[1]  # Fib 1 = 0.3%
-            double_long_price = entry_long * (1 - next_pct / 100)
-
-            double_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='buy', amount=size_long_real * 2,
-                price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-            )
-            if double_order and double_order.get('id'):
-                position.orders['double_long'] = double_order['id']
-                logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_pct}%, Fib 1)")
-
-                # Log événement ordre Fibonacci
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'limit',
-                        'side': 'long',
-                        'action': 'fib_order',
-                        'fib_level': 1
-                    })
-
-            # 5. Attendre puis placer TP Long
+            # ✅ 3. Placer NOUVEAU TP Long (0.3% fixe)
             time.sleep(1)
             TP_FIXE = 0.3
             tp_long_price = entry_long * (1 + TP_FIXE / 100)
@@ -1878,90 +1846,63 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             if tp_order and tp_order.get('id'):
                 position.orders['tp_long'] = tp_order['id']
-                logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}% fixe)")
+                logger.info(f"   ✓ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}%)")
 
-                # Log événement TP placé
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'tp',
-                        'side': 'long',
-                        'action': 'tp_order'
-                    })
-
-            # 6. Message Telegram
+            # ✅ 4. Placer NOUVEAU FIBO Long (Fib 1 = 0.3%)
             time.sleep(1)
-            message = f"""
-🔔 <b>TP LONG EXÉCUTÉ</b>
+            next_pct = position.fib_levels[1]  # Fib 1 = 0.3%
+            fibo_long_price = entry_long * (1 - next_pct / 100)
 
-💰 Prix exécution: ${current_price:.5f}
+            fibo_order = self.exchange.create_order(
+                symbol=pair, type='limit', side='buy', amount=size_long_real * 2,
+                price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+            )
+            if fibo_order and fibo_order.get('id'):
+                position.orders['double_long'] = fibo_order['id']
+                logger.info(f"   ✓ Nouveau Fibo Long @ {self.format_price(fibo_long_price, pair)} (-{next_pct}%, Fib 1)")
 
-🟢 <b>LONG (réouvert Fib 0)</b>
-📊 Contrats: {size_long_real:.0f}
-📍 Entrée: ${entry_long:.5f}
-💼 Marge: {real_pos['long']['margin']:.4f} USDT
-💰 P&L: {real_pos['long']['unrealized_pnl']:+.4f} USDT
-📈 ROE: {real_pos['long']['pnl_percentage']:+.2f}%
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-            self.send_telegram(message)
-
-            # 7. Update size_previous
             position.long_size_previous = size_long_real
 
-            # 8. Envoyer messages détaillés séparés
-            self.send_detailed_position_update(pair, position)
-
         except Exception as e:
-            logger.error(f"Erreur handle_tp_long_executed: {e}")
+            logger.error(f"❌ Erreur handle_tp_long_executed: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
     def handle_tp_short_executed(self, pair, position):
         """
-        ÉVÉNEMENT 2: TP Short touché (position Short fermée)
-        Ordre: Annuler → MARKET → LIMIT → TP → Message
+        ✅ ÉVÉNEMENT 2: TP SHORT EXÉCUTÉ
+
+        Actions (4 seulement):
+        1. Annuler FIBO SHORT (l'ordre LIMIT de doublement)
+        2. Réouvrir Short en MARKET
+        3. Placer NOUVEAU TP Short
+        4. Placer NOUVEAU FIBO Short (Fib 1)
         """
-        logger.info(f"🔔 [{pair}] TP SHORT EXÉCUTÉ")
-        print(f"\n{'='*80}")
-        print(f"🔔 TP SHORT EXÉCUTÉ - {pair}")
-        print(f"{'='*80}")
+        logger.info(f"🔔 TP SHORT EXÉCUTÉ - {pair}")
 
-        # 1. Annuler anciens ordres
-        if position.orders['tp_long']:
-            self.cancel_order(position.orders['tp_long'], pair)
-            position.orders['tp_long'] = None
-
-        if position.orders['double_short']:
-            self.cancel_order(position.orders['double_short'], pair)
-            position.orders['double_short'] = None
-
-        # 2. Ré-ouvrir Short MARKET
         try:
+            # ✅ 1. Annuler FIBO SHORT (double_short LIMIT)
+            if position.orders.get('double_short'):
+                self.cancel_order(position.orders['double_short'], pair)
+                position.orders['double_short'] = None
+                logger.info(f"   ✓ Annulé Double Short LIMIT")
+
+            # ✅ 2. Réouvrir Short en MARKET
             current_price = self.get_price(pair)
             notional = self.INITIAL_MARGIN * self.LEVERAGE
             size_short = notional / current_price
 
-            logger.info(f"Ré-ouverture Short MARKET: {size_short:.4f} contrats")
             short_order = self.exchange.create_order(
                 symbol=pair, type='market', side='sell', amount=size_short,
                 params={'tradeSide': 'open', 'holdSide': 'short'}
             )
-            print(f"✅ Short réouvert: {size_short:.4f} @ {self.format_price(current_price, pair)}")
+            logger.info(f"   ✓ Réouvert Short MARKET @ {self.format_price(current_price, pair)}")
 
-            # Log événement réouverture
-            if hasattr(self, 'telegram_commands'):
-                self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                    'order_type': 'market',
-                    'side': 'short',
-                    'action': 'reopen_after_tp'
-                })
-
-            # 3. Attendre et récupérer position réelle
+            # Attendre puis récupérer position réelle
             time.sleep(2)
             real_pos = self.get_real_positions(pair)
             if not real_pos or not real_pos.get('short'):
-                logger.error("Impossible de récupérer Short après réouverture")
+                logger.error(f"❌ Impossible de récupérer Short après réouverture")
                 return
 
             entry_short = real_pos['short']['entry_price']
@@ -1969,31 +1910,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             position.entry_price_short = entry_short
             position.short_open = True
             position.short_fib_level = 0  # Réinitialisé à Fib 0
+            position.short_margin_previous = real_pos['short']['margin']  # Mettre à jour marge
 
-            logger.info(f"Short réouvert: {size_short_real:.0f} contrats @ ${entry_short:.5f}")
-
-            # 4. Placer Double Short (Fib 1) LIMIT
-            next_pct = position.fib_levels[1]  # Fib 1 = 0.3%
-            double_short_price = entry_short * (1 + next_pct / 100)
-
-            double_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='sell', amount=size_short_real * 2,
-                price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
-            )
-            if double_order and double_order.get('id'):
-                position.orders['double_short'] = double_order['id']
-                logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_pct}%, Fib 1)")
-
-                # Log événement ordre Fibonacci
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'limit',
-                        'side': 'short',
-                        'action': 'fib_order',
-                        'fib_level': 1
-                    })
-
-            # 5. Attendre puis placer TP Short
+            # ✅ 3. Placer NOUVEAU TP Short (0.3% fixe)
             time.sleep(1)
             TP_FIXE = 0.3
             tp_short_price = entry_short * (1 - TP_FIXE / 100)
@@ -2007,104 +1926,67 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             if tp_order and tp_order.get('id'):
                 position.orders['tp_short'] = tp_order['id']
-                logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}% fixe)")
+                logger.info(f"   ✓ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}%)")
 
-                # Log événement TP placé
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'tp',
-                        'side': 'short',
-                        'action': 'tp_order'
-                    })
-
-            # 6. Message Telegram
+            # ✅ 4. Placer NOUVEAU FIBO Short (Fib 1 = 0.3%)
             time.sleep(1)
-            message = f"""
-🔔 <b>TP SHORT EXÉCUTÉ</b>
+            next_pct = position.fib_levels[1]  # Fib 1 = 0.3%
+            fibo_short_price = entry_short * (1 + next_pct / 100)
 
-💰 Prix exécution: ${current_price:.5f}
+            fibo_order = self.exchange.create_order(
+                symbol=pair, type='limit', side='sell', amount=size_short_real * 2,
+                price=fibo_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+            )
+            if fibo_order and fibo_order.get('id'):
+                position.orders['double_short'] = fibo_order['id']
+                logger.info(f"   ✓ Nouveau Fibo Short @ {self.format_price(fibo_short_price, pair)} (+{next_pct}%, Fib 1)")
 
-🔴 <b>SHORT (réouvert Fib 0)</b>
-📊 Contrats: {size_short_real:.0f}
-📍 Entrée: ${entry_short:.5f}
-💼 Marge: {real_pos['short']['margin']:.4f} USDT
-💰 P&L: {real_pos['short']['unrealized_pnl']:+.4f} USDT
-📉 ROE: {real_pos['short']['pnl_percentage']:+.2f}%
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-            self.send_telegram(message)
-
-            # 7. Update size_previous
             position.short_size_previous = size_short_real
 
-            # 8. Envoyer messages détaillés séparés
-            self.send_detailed_position_update(pair, position)
-
         except Exception as e:
-            logger.error(f"Erreur handle_tp_short_executed: {e}")
+            logger.error(f"❌ Erreur handle_tp_short_executed: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
     def handle_fib_long_executed(self, pair, position, size_before, size_after):
         """
-        ÉVÉNEMENT 3: Fibonacci Long touché (position Long doublée)
-        Ordre: Annuler → LIMIT → TP → Message (PAS de MARKET!)
+        ✅ ÉVÉNEMENT 3: FIBO LONG EXÉCUTÉ
+
+        Actions (4 seulement):
+        1. Annuler TP LONG + Double LONG (ordres anciens)
+        2. Augmenter Fib level (+1)
+        3. Placer NOUVEAU TP Long (au prix moyen)
+        4. Placer NOUVEAU Fibo Long (niveau suivant)
         """
-        logger.info(f"⚡ [{pair}] FIBONACCI LONG TOUCHÉ: {size_before:.0f} → {size_after:.0f}")
-        print(f"\n{'='*80}")
-        print(f"⚡ FIBONACCI LONG TOUCHÉ - {pair}")
-        print(f"{'='*80}")
+        logger.info(f"⚡ FIBO LONG EXÉCUTÉ: {size_before:.0f} → {size_after:.0f} contrats")
 
-        # 1. Annuler anciens ordres Long
-        if position.orders['tp_long']:
-            self.cancel_order(position.orders['tp_long'], pair)
-            position.orders['tp_long'] = None
-
-        if position.orders['double_long']:
-            self.cancel_order(position.orders['double_long'], pair)
-            position.orders['double_long'] = None
-
-        # 2. Récupérer position réelle depuis API
         try:
+            # ✅ 1. Annuler TP LONG + Double LONG (ordres anciens)
+            if position.orders.get('tp_long'):
+                self.cancel_order(position.orders['tp_long'], pair)
+                position.orders['tp_long'] = None
+                logger.info(f"   ✓ Annulé TP Long")
+
+            if position.orders.get('double_long'):
+                self.cancel_order(position.orders['double_long'], pair)
+                position.orders['double_long'] = None
+                logger.info(f"   ✓ Annulé Double Long")
+
+            # Récupérer position réelle depuis API
             real_pos = self.get_real_positions(pair)
             if not real_pos or not real_pos.get('long'):
-                logger.error("Long data manquant après doublement")
+                logger.error(f"❌ Long data manquant après doublement")
                 return
 
             entry_long_moyen = real_pos['long']['entry_price']
             size_long_total = real_pos['long']['size']
 
-            # 3. Incrémenter niveau Fibonacci
+            # ✅ 2. Augmenter Fib level (+1)
             position.long_fib_level += 1
             position.entry_price_long = entry_long_moyen
+            logger.info(f"   ✓ Fib level: {position.long_fib_level - 1} → {position.long_fib_level}")
 
-            logger.info(f"Long doublé: {size_long_total:.0f} contrats @ ${entry_long_moyen:.5f} (Fib {position.long_fib_level})")
-
-            # 4. Placer Double Long (Fib suivant) LIMIT
-            next_level = position.long_fib_level + 1
-            if next_level < len(position.fib_levels):
-                next_pct = position.fib_levels[next_level]
-                double_long_price = entry_long_moyen * (1 - next_pct / 100)
-
-                double_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='buy', amount=size_long_total * 2,
-                    price=double_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-                )
-                if double_order and double_order.get('id'):
-                    position.orders['double_long'] = double_order['id']
-                    logger.info(f"✅ Double Long @ {self.format_price(double_long_price, pair)} (-{next_pct}%, Fib {next_level})")
-
-                    # Log événement ordre Fibonacci
-                    if hasattr(self, 'telegram_commands'):
-                        self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                            'order_type': 'limit',
-                            'side': 'long',
-                            'action': 'fib_order',
-                            'fib_level': next_level
-                        })
-
-            # 5. Attendre puis placer TP Long
+            # ✅ 3. Placer NOUVEAU TP Long (0.3% fixe au prix moyen)
             time.sleep(1)
             TP_FIXE = 0.3
             tp_long_price = entry_long_moyen * (1 + TP_FIXE / 100)
@@ -2118,104 +2000,69 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             if tp_order and tp_order.get('id'):
                 position.orders['tp_long'] = tp_order['id']
-                logger.info(f"✅ TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}% fixe, {size_long_total:.0f} contrats)")
+                logger.info(f"   ✓ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}%, {size_long_total:.0f} contrats)")
 
-                # Log événement TP placé
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'tp',
-                        'side': 'long',
-                        'action': 'tp_order'
-                    })
-
-            # 6. Message Telegram
+            # ✅ 4. Placer NOUVEAU Fibo Long (niveau suivant)
             time.sleep(1)
-            message = f"""
-⚡ <b>FIBONACCI {position.long_fib_level} LONG TOUCHÉ</b>
+            next_level = position.long_fib_level + 1
+            if next_level < len(position.fib_levels):
+                next_pct = position.fib_levels[next_level]
+                fibo_long_price = entry_long_moyen * (1 - next_pct / 100)
 
-📈 Position doublée
+                fibo_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=size_long_total * 2,
+                    price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                )
+                if fibo_order and fibo_order.get('id'):
+                    position.orders['double_long'] = fibo_order['id']
+                    logger.info(f"   ✓ Nouveau Fibo Long @ {self.format_price(fibo_long_price, pair)} (-{next_pct}%, Fib {next_level})")
 
-🟢 <b>LONG (Fib {position.long_fib_level})</b>
-📊 Contrats: {size_long_total:.0f} (+{size_after - size_before:.0f})
-📍 Entrée moyenne: ${entry_long_moyen:.5f}
-💼 Marge: {real_pos['long']['margin']:.4f} USDT
-💰 P&L: {real_pos['long']['unrealized_pnl']:+.4f} USDT
-📈 ROE: {real_pos['long']['pnl_percentage']:+.2f}%
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-            self.send_telegram(message)
-
-            # 7. Update size_previous
             position.long_size_previous = size_long_total
 
-            # 8. Envoyer messages détaillés séparés
-            self.send_detailed_position_update(pair, position)
-
         except Exception as e:
-            logger.error(f"Erreur handle_fib_long_executed: {e}")
+            logger.error(f"❌ Erreur handle_fib_long_executed: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
     def handle_fib_short_executed(self, pair, position, size_before, size_after):
         """
-        ÉVÉNEMENT 4: Fibonacci Short touché (position Short doublée)
-        Ordre: Annuler → LIMIT → TP → Message (PAS de MARKET!)
+        ✅ ÉVÉNEMENT 4: FIBO SHORT EXÉCUTÉ
+
+        Actions (4 seulement):
+        1. Annuler TP SHORT + Double SHORT (ordres anciens)
+        2. Augmenter Fib level (+1)
+        3. Placer NOUVEAU TP Short (au prix moyen)
+        4. Placer NOUVEAU Fibo Short (niveau suivant)
         """
-        logger.info(f"⚡ [{pair}] FIBONACCI SHORT TOUCHÉ: {size_before:.0f} → {size_after:.0f}")
-        print(f"\n{'='*80}")
-        print(f"⚡ FIBONACCI SHORT TOUCHÉ - {pair}")
-        print(f"{'='*80}")
+        logger.info(f"⚡ FIBO SHORT EXÉCUTÉ: {size_before:.0f} → {size_after:.0f} contrats")
 
-        # 1. Annuler anciens ordres Short
-        if position.orders['tp_short']:
-            self.cancel_order(position.orders['tp_short'], pair)
-            position.orders['tp_short'] = None
-
-        if position.orders['double_short']:
-            self.cancel_order(position.orders['double_short'], pair)
-            position.orders['double_short'] = None
-
-        # 2. Récupérer position réelle depuis API
         try:
+            # ✅ 1. Annuler TP SHORT + Double SHORT (ordres anciens)
+            if position.orders.get('tp_short'):
+                self.cancel_order(position.orders['tp_short'], pair)
+                position.orders['tp_short'] = None
+                logger.info(f"   ✓ Annulé TP Short")
+
+            if position.orders.get('double_short'):
+                self.cancel_order(position.orders['double_short'], pair)
+                position.orders['double_short'] = None
+                logger.info(f"   ✓ Annulé Double Short")
+
+            # Récupérer position réelle depuis API
             real_pos = self.get_real_positions(pair)
             if not real_pos or not real_pos.get('short'):
-                logger.error("Short data manquant après doublement")
+                logger.error(f"❌ Short data manquant après doublement")
                 return
 
             entry_short_moyen = real_pos['short']['entry_price']
             size_short_total = real_pos['short']['size']
 
-            # 3. Incrémenter niveau Fibonacci
+            # ✅ 2. Augmenter Fib level (+1)
             position.short_fib_level += 1
             position.entry_price_short = entry_short_moyen
+            logger.info(f"   ✓ Fib level: {position.short_fib_level - 1} → {position.short_fib_level}")
 
-            logger.info(f"Short doublé: {size_short_total:.0f} contrats @ ${entry_short_moyen:.5f} (Fib {position.short_fib_level})")
-
-            # 4. Placer Double Short (Fib suivant) LIMIT
-            next_level = position.short_fib_level + 1
-            if next_level < len(position.fib_levels):
-                next_pct = position.fib_levels[next_level]
-                double_short_price = entry_short_moyen * (1 + next_pct / 100)
-
-                double_order = self.exchange.create_order(
-                    symbol=pair, type='limit', side='sell', amount=size_short_total * 2,
-                    price=double_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
-                )
-                if double_order and double_order.get('id'):
-                    position.orders['double_short'] = double_order['id']
-                    logger.info(f"✅ Double Short @ {self.format_price(double_short_price, pair)} (+{next_pct}%, Fib {next_level})")
-
-                    # Log événement ordre Fibonacci
-                    if hasattr(self, 'telegram_commands'):
-                        self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                            'order_type': 'limit',
-                            'side': 'short',
-                            'action': 'fib_order',
-                            'fib_level': next_level
-                        })
-
-            # 5. Attendre puis placer TP Short
+            # ✅ 3. Placer NOUVEAU TP Short (0.3% fixe au prix moyen)
             time.sleep(1)
             TP_FIXE = 0.3
             tp_short_price = entry_short_moyen * (1 - TP_FIXE / 100)
@@ -2229,145 +2076,239 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             if tp_order and tp_order.get('id'):
                 position.orders['tp_short'] = tp_order['id']
-                logger.info(f"✅ TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}% fixe, {size_short_total:.0f} contrats)")
+                logger.info(f"   ✓ Nouveau TP Short @ {self.format_price(tp_short_price, pair)} (-{TP_FIXE}%, {size_short_total:.0f} contrats)")
 
-                # Log événement TP placé
-                if hasattr(self, 'telegram_commands'):
-                    self.telegram_commands.log_event('ORDER_PLACED', pair, {
-                        'order_type': 'tp',
-                        'side': 'short',
-                        'action': 'tp_order'
-                    })
-
-            # 6. Message Telegram
+            # ✅ 4. Placer NOUVEAU Fibo Short (niveau suivant)
             time.sleep(1)
-            message = f"""
-⚡ <b>FIBONACCI {position.short_fib_level} SHORT TOUCHÉ</b>
+            next_level = position.short_fib_level + 1
+            if next_level < len(position.fib_levels):
+                next_pct = position.fib_levels[next_level]
+                fibo_short_price = entry_short_moyen * (1 + next_pct / 100)
 
-📉 Position doublée
+                fibo_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='sell', amount=size_short_total * 2,
+                    price=fibo_short_price, params={'tradeSide': 'open', 'holdSide': 'short'}
+                )
+                if fibo_order and fibo_order.get('id'):
+                    position.orders['double_short'] = fibo_order['id']
+                    logger.info(f"   ✓ Nouveau Fibo Short @ {self.format_price(fibo_short_price, pair)} (+{next_pct}%, Fib {next_level})")
 
-🔴 <b>SHORT (Fib {position.short_fib_level})</b>
-📊 Contrats: {size_short_total:.0f} (+{size_after - size_before:.0f})
-📍 Entrée moyenne: ${entry_short_moyen:.5f}
-💼 Marge: {real_pos['short']['margin']:.4f} USDT
-💰 P&L: {real_pos['short']['unrealized_pnl']:+.4f} USDT
-📉 ROE: {real_pos['short']['pnl_percentage']:+.2f}%
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-"""
-            self.send_telegram(message)
-
-            # 7. Update size_previous
             position.short_size_previous = size_short_total
 
-            # 8. Envoyer messages détaillés séparés
-            self.send_detailed_position_update(pair, position)
-
         except Exception as e:
-            logger.error(f"Erreur handle_fib_short_executed: {e}")
+            logger.error(f"❌ Erreur handle_fib_short_executed: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
+    # ============================================================================
+    # MESSAGES TELEGRAM PAR POSITION
+    # ============================================================================
+
+    def send_position_message(self, pair, position):
+        """
+        Crée et envoie 1 message Telegram par position
+        Format: Prix | LONG | SHORT | ORDRES ACTIFS
+        """
+        try:
+            current_price = self.get_price(pair)
+            if not current_price:
+                return
+
+            real_pos = self.get_real_positions(pair)
+            if not real_pos:
+                return
+
+            pair_name = pair.split('/')[0]
+
+            # === HEADER ===
+            message = f"📊 <b>{pair_name}</b> | 💰 {self.format_price(current_price, pair)}\n"
+
+            # === LONG ===
+            if real_pos.get('long'):
+                long_data = real_pos['long']
+                message += f"🟢 LONG | {long_data['size']:.0f} @ {self.format_price(long_data['entry_price'], pair)} | "
+                message += f"Marge: {long_data['margin']:.2f} | P&L: {long_data['unrealized_pnl']:+.2f}\n"
+            else:
+                message += f"🟢 LONG | Fermé\n"
+
+            # === SHORT ===
+            if real_pos.get('short'):
+                short_data = real_pos['short']
+                message += f"🔴 SHORT | {short_data['size']:.0f} @ {self.format_price(short_data['entry_price'], pair)} | "
+                message += f"Marge: {short_data['margin']:.2f} | P&L: {short_data['unrealized_pnl']:+.2f}\n"
+            else:
+                message += f"🔴 SHORT | Fermé\n"
+
+            # === ORDRES ===
+            message += f"\n📋 <b>Ordres Actifs:</b>\n"
+
+            # TP Long
+            if position.orders.get('tp_long'):
+                message += f"🎯 TP Long (Fib {position.long_fib_level})\n"
+            else:
+                message += f"🎯 TP Long | -\n"
+
+            # Fibo Long
+            if position.orders.get('double_long'):
+                next_pct = position.fib_levels[position.long_fib_level + 1] if position.long_fib_level + 1 < len(position.fib_levels) else 0
+                message += f"📦 Fibo Long (Fib {position.long_fib_level + 1}, {next_pct:.2f}%)\n"
+            else:
+                message += f"📦 Fibo Long | -\n"
+
+            # TP Short
+            if position.orders.get('tp_short'):
+                message += f"🎯 TP Short (Fib {position.short_fib_level})\n"
+            else:
+                message += f"🎯 TP Short | -\n"
+
+            # Fibo Short
+            if position.orders.get('double_short'):
+                next_pct = position.fib_levels[position.short_fib_level + 1] if position.short_fib_level + 1 < len(position.fib_levels) else 0
+                message += f"📦 Fibo Short (Fib {position.short_fib_level + 1}, {next_pct:.2f}%)\n"
+            else:
+                message += f"📦 Fibo Short | -\n"
+
+            message += f"\n⏰ {datetime.now().strftime('%H:%M:%S')}"
+
+            self.send_telegram(message)
+
+        except Exception as e:
+            logger.error(f"Erreur send_position_message {pair}: {e}")
+
+    def send_all_position_messages(self):
+        """Envoie les messages Telegram pour TOUTES les positions"""
+        for pair, position in self.active_positions.items():
+            self.send_position_message(pair, position)
+            time.sleep(0.5)  # Petit délai pour éviter spam Telegram
+
+    # ============================================================================
+    # 4 DÉTECTEURS SIMPLES - Cœur de la stratégie
+    # ============================================================================
+
+    def detect_tp_long_executed(self, pair, position, real_pos):
+        """
+        Détecte si TP Long a été exécuté
+        Signature: Marge diminue de >50% OU position fermée
+        """
+        if not position.long_open or not real_pos.get('long'):
+            return False
+
+        long_margin_now = real_pos['long']['margin']
+
+        # Si marge diminue de plus de 50% = TP touché
+        if position.long_margin_previous > 0:
+            margin_decrease_pct = ((position.long_margin_previous - long_margin_now) / position.long_margin_previous) * 100
+            if margin_decrease_pct > 50:
+                logger.info(f"✅ TP Long exécuté: marge {position.long_margin_previous:.2f} → {long_margin_now:.2f} (-{margin_decrease_pct:.0f}%)")
+                return True
+
+        # Mettre à jour pour prochaine vérification
+        position.long_margin_previous = long_margin_now
+        return False
+
+    def detect_tp_short_executed(self, pair, position, real_pos):
+        """
+        Détecte si TP Short a été exécuté
+        Signature: Marge diminue de >50% OU position fermée
+        """
+        if not position.short_open or not real_pos.get('short'):
+            return False
+
+        short_margin_now = real_pos['short']['margin']
+
+        # Si marge diminue de plus de 50% = TP touché
+        if position.short_margin_previous > 0:
+            margin_decrease_pct = ((position.short_margin_previous - short_margin_now) / position.short_margin_previous) * 100
+            if margin_decrease_pct > 50:
+                logger.info(f"✅ TP Short exécuté: marge {position.short_margin_previous:.2f} → {short_margin_now:.2f} (-{margin_decrease_pct:.0f}%)")
+                return True
+
+        # Mettre à jour pour prochaine vérification
+        position.short_margin_previous = short_margin_now
+        return False
+
+    def detect_fibo_long_executed(self, pair, position, real_pos):
+        """
+        Détecte si Fibo Limite Long a été exécuté
+        Signature: Taille augmente de >30%
+        """
+        if not real_pos.get('long'):
+            return False
+
+        long_size_now = real_pos['long']['size']
+
+        # Si taille augmente de plus de 30% = Fibo exécuté
+        if position.long_size_previous > 0:
+            size_increase_pct = ((long_size_now - position.long_size_previous) / position.long_size_previous) * 100
+            if size_increase_pct > 30:
+                logger.info(f"✅ Fibo Long exécuté: taille {position.long_size_previous:.0f} → {long_size_now:.0f} (+{size_increase_pct:.0f}%)")
+                return True
+
+        return False
+
+    def detect_fibo_short_executed(self, pair, position, real_pos):
+        """
+        Détecte si Fibo Limite Short a été exécuté
+        Signature: Taille augmente de >30%
+        """
+        if not real_pos.get('short'):
+            return False
+
+        short_size_now = real_pos['short']['size']
+
+        # Si taille augmente de plus de 30% = Fibo exécuté
+        if position.short_size_previous > 0:
+            size_increase_pct = ((short_size_now - position.short_size_previous) / position.short_size_previous) * 100
+            if size_increase_pct > 30:
+                logger.info(f"✅ Fibo Short exécuté: taille {position.short_size_previous:.0f} → {short_size_now:.0f} (+{size_increase_pct:.0f}%)")
+                return True
+
+        return False
+
+    # ============================================================================
+
     def check_orders_status(self, iteration=0):
-        """Détecte 4 événements: TP Long, TP Short, Fib Long, Fib Short"""
+        """
+        Boucle de détection (chaque 1 seconde)
+        Détecte les 4 événements et déclenche les actions
+        """
 
         for pair, position in list(self.active_positions.items()):
             try:
-                # RATTRAPAGE ordres manquants (toutes les 2s)
-                if iteration % 2 == 0:
-                    self.verify_and_fix_missing_orders(pair, position)
-
-                # INTERROGER API pour état actuel
+                # Récupérer l'état RÉEL de l'API
                 real_pos = self.get_real_positions(pair)
                 if not real_pos:
                     continue
 
-                # États actuel et précédent
-                long_exists_now = real_pos.get('long') is not None
-                short_exists_now = real_pos.get('short') is not None
+                # ✅ ÉVÉNEMENT 1: TP LONG EXÉCUTÉ
+                if self.detect_tp_long_executed(pair, position, real_pos):
+                    self.handle_tp_long_executed(pair, position)
+                    time.sleep(1)
+                    self.send_position_message(pair, position)  # Message Telegram
+                    continue
 
-                long_size_now = real_pos['long']['size'] if long_exists_now else 0
-                short_size_now = real_pos['short']['size'] if short_exists_now else 0
+                # ✅ ÉVÉNEMENT 2: TP SHORT EXÉCUTÉ
+                if self.detect_tp_short_executed(pair, position, real_pos):
+                    self.handle_tp_short_executed(pair, position)
+                    time.sleep(1)
+                    self.send_position_message(pair, position)  # Message Telegram
+                    continue
 
-                # Marges actuelles
-                long_margin_now = real_pos['long']['margin'] if long_exists_now else 0
-                short_margin_now = real_pos['short']['margin'] if short_exists_now else 0
+                # ✅ ÉVÉNEMENT 3: FIBO LONG EXÉCUTÉ
+                if self.detect_fibo_long_executed(pair, position, real_pos):
+                    self.handle_fibo_long_executed(pair, position, position.long_size_previous, real_pos['long']['size'])
+                    position.long_size_previous = real_pos['long']['size']  # Mettre à jour size_previous
+                    time.sleep(1)
+                    self.send_position_message(pair, position)  # Message Telegram
+                    continue
 
-                # DÉTECTION ÉVÉNEMENT 1: TP Long exécuté (marge diminue fortement)
-                # Logique : TP touché → position fermée → rouverte avec marge initiale
-                # Ex: Marge était 3 USDT (Fib 1) → devient 1 USDT (Fib 0) = TP touché
-                if position.long_open and long_exists_now:
-                    if position.long_margin_previous > 0:
-                        # Si marge diminue de plus de 50% = TP touché
-                        margin_decrease_pct = ((position.long_margin_previous - long_margin_now) / position.long_margin_previous) * 100
-
-                        if margin_decrease_pct > 50:
-                            logger.info(f"🎯 TP Long détecté par marge: {position.long_margin_previous:.2f} → {long_margin_now:.2f} USDT ({margin_decrease_pct:.1f}% diminution)")
-
-                            # Enregistrer événement dans buffer trailing
-                            if hasattr(self, 'telegram_commands'):
-                                self.telegram_commands.log_event('TP_DETECTED', pair, {
-                                    'side': 'long',
-                                    'margin_before': position.long_margin_previous,
-                                    'margin_after': long_margin_now
-                                })
-
-                            self.handle_tp_long_executed(pair, position)
-                            # Mettre à jour la marge après traitement
-                            position.long_margin_previous = long_margin_now
-                            continue
-
-                    # Mise à jour marge pour prochaine vérification
-                    position.long_margin_previous = long_margin_now
-
-                # Si position Long disparue complètement
-                elif position.long_open and not long_exists_now:
-                    logger.warning(f"⚠️ Position Long fermée (disparue) - Vérification...")
-                    position.long_open = False
-                    # Ne rien faire, attend que position se rouvre
-
-                # DÉTECTION ÉVÉNEMENT 2: TP Short exécuté (marge diminue fortement)
-                if position.short_open and short_exists_now:
-                    if position.short_margin_previous > 0:
-                        # Si marge diminue de plus de 50% = TP touché
-                        margin_decrease_pct = ((position.short_margin_previous - short_margin_now) / position.short_margin_previous) * 100
-
-                        if margin_decrease_pct > 50:
-                            logger.info(f"🎯 TP Short détecté par marge: {position.short_margin_previous:.2f} → {short_margin_now:.2f} USDT ({margin_decrease_pct:.1f}% diminution)")
-
-                            # Enregistrer événement dans buffer trailing
-                            if hasattr(self, 'telegram_commands'):
-                                self.telegram_commands.log_event('TP_DETECTED', pair, {
-                                    'side': 'short',
-                                    'margin_before': position.short_margin_previous,
-                                    'margin_after': short_margin_now
-                                })
-
-                            self.handle_tp_short_executed(pair, position)
-                            # Mettre à jour la marge après traitement
-                            position.short_margin_previous = short_margin_now
-                            continue
-
-                    # Mise à jour marge pour prochaine vérification
-                    position.short_margin_previous = short_margin_now
-
-                # Si position Short disparue complètement
-                elif position.short_open and not short_exists_now:
-                    logger.warning(f"⚠️ Position Short fermée (disparue) - Vérification...")
-                    position.short_open = False
-                    # Ne rien faire, attend que position se rouvre
-
-                # DÉTECTION ÉVÉNEMENT 3: Fibonacci Long touché (size augmente)
-                if long_exists_now and position.long_size_previous > 0:
-                    if long_size_now > position.long_size_previous * 1.3:
-                        self.handle_fib_long_executed(pair, position, position.long_size_previous, long_size_now)
-                        continue
-
-                # DÉTECTION ÉVÉNEMENT 4: Fibonacci Short touché (size augmente)
-                if short_exists_now and position.short_size_previous > 0:
-                    if short_size_now > position.short_size_previous * 1.3:
-                        self.handle_fib_short_executed(pair, position, position.short_size_previous, short_size_now)
-                        continue
+                # ✅ ÉVÉNEMENT 4: FIBO SHORT EXÉCUTÉ
+                if self.detect_fibo_short_executed(pair, position, real_pos):
+                    self.handle_fibo_short_executed(pair, position, position.short_size_previous, real_pos['short']['size'])
+                    position.short_size_previous = real_pos['short']['size']  # Mettre à jour size_previous
+                    time.sleep(1)
+                    self.send_position_message(pair, position)  # Message Telegram
+                    continue
 
             except Exception as e:
                 logger.error(f"Erreur check_orders_status {pair}: {e}")
