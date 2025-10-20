@@ -1015,21 +1015,19 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             # Arrondir le prix selon les règles Bitget
             trigger_price_rounded = self.round_price(trigger_price, symbol)
 
-            # Endpoint et body
-            endpoint = '/api/mix/v1/order/place-tpsl-order'
+            # Endpoint et body (V2 - CORRECT!)
+            endpoint = '/api/v2/mix/order/place-tpsl-order'
             body = {
                 'symbol': symbol_bitget,
+                'marginCoin': 'USDT',
+                'productType': 'umcbl',  # REQUIS!
                 'planType': plan_type,  # 'profit_plan' ou 'loss_plan'
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
                 'holdSide': hold_side,
-                'size': str(round(size, 2)),  # Arrondir à 2 décimales
-                'executePrice': '0'
+                'size': str(round(size, 2))
             }
             body_json = json.dumps(body)
-
-            # DEBUG: Log le body envoyé
-            print(f"🔍 DEBUG TP/SL: endpoint={endpoint}, body={body}")
 
             # Timestamp et signature
             timestamp = str(int(time.time() * 1000))
