@@ -1,15 +1,60 @@
 # Avancement du Projet - Trading Bot
 
-> **Dernière mise à jour** : 2025-10-20
+> **Dernière mise à jour** : 2025-10-20 (Débugage erreurs API)
 
 ---
 
-## 🎯 Session Actuelle
+## 🎯 Session Actuelle - 2025-10-20 (Session 3)
 
-**Date** : 2025-10-20 (Suite)
-**Focus** : Fixes TP/Fibo display + Correction API paramètres
+**Date** : 2025-10-20 (Debugging & Fixes)
+**Focus** : Diagnostic profond des erreurs API placement TP/SL
+**Status** : 🔴 BLOQUÉ sur erreur 43023 - Investigation en cours
 
-### Ce qui a été fait aujourd'hui (Session 2)
+### Débugage Session 3 - Erreurs API Place TP/SL
+
+#### 🔍 Diagnostique Root Cause
+
+**Erreurs identifiées** :
+1. ❌ Error 40808 (RÉSOLU) - `size checkBDScale error value=249.6`
+   - Cause: Bitget requires SIZE as INTEGER (checkScale=0), pas float avec 2 décimales
+   - Fix: Changé `str(round(size, 2))` → `str(int(size))`
+
+2. ❌ Error 43023 (BLOQUÉ) - `Insufficient position, can not set profit or stop loss`
+   - Survient à CHAQUE tentative de placer TP/SL (même après fix 40808)
+   - Position existe (vérifiée via API après ouverture)
+   - Symptôme: Position opened OK, mais placement TP/SL échoue systématiquement
+   - Timing: Essayé 2s, 5s, 10s d'attente entre ouverture et placement TP
+   - SIZE: Utilisant maintenant size exact from API (real_pos['long']['size']), pas calculé
+
+#### 🔧 Fixes Appliqués (Commits 65a24cc, 924f7a2)
+- ✅ Size format: De float (2 décimales) → integer (0 décimales)
+- ✅ Size source: De calculated → API response (exact match)
+- ✅ Error logging: Ajouté traceback complet + réponse API
+- ✅ Wait times: 2s → 5s (positions need more settlement time)
+- ✅ get_tpsl_orders() logging: Ajouté détails des requêtes API
+
+#### 📊 Tests Effectués
+- 3 tests complets avec logs détaillés
+- Tous ÉCHOUENT à stage TP Long placement (erreur 43023)
+- Market orders SUCCÈDENT (positions s'ouvrent correctement)
+- get_real_positions() FONCTIONNE (récupère positions ouvertes)
+- Seul placement TP/SL ÉCHOUE (erreur 43023)
+
+#### 🤔 Hypothèses Restantes
+1. **Paper Trading Issue** : PAPTRADING=1 a des règles différentes?
+2. **Position State** : Position nouveau-née peut-être pas "ready" pour TP/SL?
+3. **API Endpoint** : Endpoint `/api/v2/mix/order/place-tpsl-order` correct mais pas pour Paper Trading?
+4. **Parameter mismatch** : Malgré utilisation exact sizes, quelque chose encore ne match pas
+
+#### 🚀 Prochaines Étapes Immédiates
+1. Tester SANS Paper Trading (si possible)
+2. Augmenter wait time à 10+ secondes
+3. Chercher doc Bitget specific à Paper Trading TP/SL requirements
+4. Considérer alternative: Utiliser ordres LIMIT avec stop-loss built-in au lieu de TP/SL séparés
+
+---
+
+### Ce qui a été fait aujourd'hui (Sessions 1-2)
 
 #### 🔧 Fixes de Bugs Critiques (Commit: b68d6c3)
 
