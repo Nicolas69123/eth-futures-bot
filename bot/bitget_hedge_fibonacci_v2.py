@@ -1017,6 +1017,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # Endpoint et body (V2 - CORRECT!)
             endpoint = '/api/v2/mix/order/place-tpsl-order'
+            # Important: Size MUST be integer for TP/SL orders (Bitget requires checkScale=0)
             body = {
                 'symbol': symbol_bitget,
                 'marginCoin': 'USDT',
@@ -1025,7 +1026,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
                 'holdSide': hold_side,
-                'size': str(round(size, 2))
+                'size': str(int(round(size)))  # FIX: Must be integer, not float!
             }
             body_json = json.dumps(body)
 
@@ -1057,13 +1058,21 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             if data.get('code') == '00000':
                 order_id = data.get('data', {}).get('orderId')
                 print(f"✅ TP/SL {plan_type} placé: ID {order_id}")
+                logger.info(f"✅ TP/SL {plan_type} placé avec succès: ID {order_id}")
                 return {'id': order_id, 'info': data}
             else:
-                print(f"❌ Erreur TP/SL API ({data.get('code')}): {data.get('msg')}")
+                error_msg = f"❌ Erreur TP/SL API ({data.get('code')}): {data.get('msg')}"
+                print(error_msg)
+                logger.error(error_msg)
+                logger.error(f"   Response complète: {data}")
                 return None
 
         except Exception as e:
-            print(f"❌ Erreur placement TP/SL: {e}")
+            error_msg = f"❌ Erreur placement TP/SL: {e}"
+            print(error_msg)
+            logger.error(error_msg)
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
     def get_tpsl_order_history(self, symbol, limit=100):
@@ -1429,7 +1438,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             )
             print(f"✅ Short ouvert: {size:.4f}")
 
-            time.sleep(2)  # Attendre exécution
+            time.sleep(5)  # Attendre exécution PLUS LONG (Bitget plus lent)
 
             # Récupérer vraies positions
             real_pos = self.get_real_positions(pair)
@@ -1452,9 +1461,9 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             self.active_positions[pair] = position
 
-            # Attendre 3s avant de placer les TP (Bitget refuse si trop rapide)
-            print("\n⏳ Attente 3s avant placement TP...")
-            time.sleep(3)
+            # Attendre avant de placer les TP (Bitget refuse si trop rapide)
+            print("\n⏳ Attente 5s avant placement TP...")
+            time.sleep(5)
 
             # 2. Placer les 4 ordres limites avec vérification
             print("\n2️⃣ Placement des 4 ordres limites...")
@@ -1484,13 +1493,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             print(f"   Distance TP Short: {((tp_short_price - current_market_price) / current_market_price * 100):+.4f}%")
 
             # a) TP Long (VRAI ordre TP/SL Bitget)
+            # IMPORTANT: Use actual position size from API, not calculated size!
             try:
                 tp_long_order = self.place_tpsl_order(
                     symbol=pair,
                     plan_type='profit_plan',
                     trigger_price=tp_long_price,
                     hold_side='long',
-                    size=size
+                    size=real_pos['long']['size']  # Use ACTUAL size from position!
                 )
                 if tp_long_order and tp_long_order.get('id'):
                     position.orders['tp_long'] = tp_long_order['id']
@@ -1520,13 +1530,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 return False
 
             # c) TP Short (VRAI ordre TP/SL Bitget)
+            # IMPORTANT: Use actual position size from API, not calculated size!
             try:
                 tp_short_order = self.place_tpsl_order(
                     symbol=pair,
                     plan_type='profit_plan',
                     trigger_price=tp_short_price,
                     hold_side='short',
-                    size=size
+                    size=real_pos['short']['size']  # Use ACTUAL size from position!
                 )
                 if tp_short_order and tp_short_order.get('id'):
                     position.orders['tp_short'] = tp_short_order['id']
