@@ -1029,6 +1029,10 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             }
             body_json = json.dumps(body)
 
+            # LOG DÉTAILLÉ
+            print(f"🔍 PLACE TP/SL - symbol={symbol} → {symbol_bitget}, price={trigger_price} → {trigger_price_rounded}, type={plan_type}, side={hold_side}, size={size}")
+            print(f"🔍 BODY: {body}")
+
             # Timestamp et signature
             timestamp = str(int(time.time() * 1000))
             signature = self.bitget_sign_request(timestamp, 'POST', endpoint, body_json)
