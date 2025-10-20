@@ -1050,6 +1050,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # Requête HTTP
             url = f"https://api.bitget.com{endpoint}"
+            print(f"🔥 TP/SL: {endpoint} | {body_json[:150]}...")
             response = requests.post(url, headers=headers, data=body_json, timeout=10)
             data = response.json()
 
