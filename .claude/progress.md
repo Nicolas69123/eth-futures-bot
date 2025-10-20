@@ -1,10 +1,90 @@
 # Avancement du Projet - Trading Bot
 
-> **Dernière mise à jour** : 2025-10-20 (Débugage erreurs API)
+> **Dernière mise à jour** : 2025-10-20 (Session 4 - FIX MAJEUR Cleanup + Size correct)
 
 ---
 
-## 🎯 Session Actuelle - 2025-10-20 (Session 3)
+## 🎯 Session Actuelle - 2025-10-20 (Session 4)
+
+**Date** : 2025-10-20 20:00-20:10 UTC
+**Focus** : Cleanup automatique + Fix taille ordres LIMIT
+**Status** : ✅ RÉSOLU - Bot en production avec config correcte
+
+### 🔥 Problème Initial : Bot redéployé sans cleanup
+
+**Symptôme** :
+- Bot démarré avec message "⚠️ CLEANUP SKIPPED"
+- 6 ordres zombies présents au démarrage (positions précédentes)
+- Configuration SKIP_CLEANUP=1 dans .env
+
+### 🎯 Solution Appliquée (Commits: 3179052, a2e4171)
+
+#### Commit 3179052 - Cleanup automatique OBLIGATOIRE
+**Changements** :
+- ❌ SUPPRIMÉ flag SKIP_CLEANUP (cleanup TOUJOURS actif)
+- ✅ Cleanup automatique au DÉMARRAGE (5 tentatives retry loop)
+- ✅ Cleanup automatique à l'ARRÊT (Ctrl+C)
+- ✅ Messages Telegram pour chaque étape cleanup
+
+**Malentendu résolu** :
+- ❌ J'avais SUPPRIMÉ ordres LIMIT (étapes 5 & 6) pensant que tu voulais seulement 2 TP
+- ✅ Tu voulais GARDER les 6 ordres COMME V3 (2 positions + 4 ordres)
+
+#### Commit a2e4171 - Fix taille ordres LIMIT
+**Problème identifié** :
+- V3 créait LIMIT avec `amount = size * 2` ← **FAUX !**
+- Quand LIMIT s'exécute → Triple la position au lieu de doubler
+
+**Fix appliqué** :
+- ✅ `amount = size` (MÊME taille que position actuelle)
+- ✅ Quand LIMIT exécuté → Position double automatiquement
+- ✅ Commentaires clarifiés : "Double la marge"
+
+### 📊 Configuration Finale Déployée
+
+**Paramètres** :
+- 💰 Marge initiale : **5 USDT** (au lieu de 1)
+- 📈 TP : **0.5%** (au lieu de 0.3%)
+- 📊 Fibo level 1 : **0.3%** (au lieu de 0.1%)
+- ⚡ Leverage : **50x**
+
+**Structure hedge (6 ordres)** :
+1. ✅ Position LONG (1250 contrats)
+2. ✅ Position SHORT (1250 contrats)
+3. ✅ TP LONG @ +0.5%
+4. ✅ TP SHORT @ -0.5%
+5. ✅ LIMIT BUY @ -0.3% (size: 1250 = double marge LONG)
+6. ✅ LIMIT SELL @ +0.3% (size: 1250 = double marge SHORT)
+
+**Total** : 2 positions + 4 ordres
+
+### ✅ Résultat Final
+
+**Logs de production (20:08:43 UTC)** :
+```
+✅ HEDGE INITIAL COMPLET!
+📊 Résumé:
+   Positions: LONG 1250 + SHORT 1250
+   Ordres TP: 2
+   Ordres LIMIT Fibo: 2 (doublent la marge)
+   Total: 2 positions + 4 ordres
+
+🔄 BOUCLE DE MONITORING DÉMARRÉE - 4 CHECKS/SECONDE
+```
+
+**Session active** : `115080.trading` sur Oracle Cloud
+**Status** : ✅ Bot en ligne 24/7 avec config correcte
+
+### 🎓 Leçons Apprises
+
+1. **Cleanup doit être OBLIGATOIRE** - Jamais de SKIP_CLEANUP en production
+2. **Size ordres LIMIT = size position** - Pas *2 (doublement automatique quand exécuté)
+3. **Toujours vérifier compréhension avant modifier** - Éviter malentendus
+4. **Cleanup manuel si auto échoue** - Script cleanup_positions.py fiable
+
+---
+
+## 📜 Session 2025-10-20 (Session 3)
 
 **Date** : 2025-10-20 (Debugging & Fixes)
 **Focus** : Diagnostic profond des erreurs API placement TP/SL
