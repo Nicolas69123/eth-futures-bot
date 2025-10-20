@@ -1798,44 +1798,69 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         3. Placer NOUVEAU TP Long
         4. Placer NOUVEAU FIBO Long (Fib 1)
         """
+        print(f"\n🔔 HANDLE_TP_LONG_EXECUTED START - {pair}")
         logger.info(f"🔔 TP LONG EXÉCUTÉ - {pair}")
 
         try:
             # ✅ 1. Annuler FIBO LONG (double_long LIMIT)
+            print(f"   [1/4] Annuler Double Long LIMIT...")
             if position.orders.get('double_long'):
-                self.cancel_order(position.orders['double_long'], pair)
+                order_id = position.orders['double_long']
+                print(f"       Order ID: {order_id}")
+                result = self.cancel_order(order_id, pair)
+                print(f"       Résultat: {result}")
                 position.orders['double_long'] = None
-                logger.info(f"   ✓ Annulé Double Long LIMIT")
+                logger.info(f"   ✓ Annulé Double Long LIMIT: {order_id}")
+            else:
+                print(f"       ⚠️ Pas d'ordre double_long trouvé!")
+                logger.warning(f"   ⚠️ Pas d'ordre double_long pour annuler")
 
             # ✅ 2. Réouvrir Long en MARKET
+            print(f"   [2/4] Réouvrir Long MARKET...")
             current_price = self.get_price(pair)
+            print(f"       Prix: {current_price}")
             notional = self.INITIAL_MARGIN * self.LEVERAGE
             size_long = notional / current_price
+            print(f"       Size: {size_long}")
 
-            long_order = self.exchange.create_order(
-                symbol=pair, type='market', side='buy', amount=size_long,
-                params={'tradeSide': 'open', 'holdSide': 'long'}
-            )
-            logger.info(f"   ✓ Réouvert Long MARKET @ {self.format_price(current_price, pair)}")
+            try:
+                long_order = self.exchange.create_order(
+                    symbol=pair, type='market', side='buy', amount=size_long,
+                    params={'tradeSide': 'open', 'holdSide': 'long'}
+                )
+                print(f"       ✓ Ordre créé: {long_order.get('id')}")
+                logger.info(f"   ✓ Réouvert Long MARKET @ {self.format_price(current_price, pair)}")
+            except Exception as e:
+                print(f"       ❌ ERREUR créer ordre: {e}")
+                logger.error(f"   ❌ Erreur création ordre MARKET: {e}")
+                return
 
             # Attendre puis récupérer position réelle
+            print(f"   [2bis] Attente 2s + récupération position...")
             time.sleep(2)
             real_pos = self.get_real_positions(pair)
+            print(f"       Real pos: {real_pos}")
+
             if not real_pos or not real_pos.get('long'):
+                print(f"       ❌ Impossible de récupérer Long après réouverture")
                 logger.error(f"❌ Impossible de récupérer Long après réouverture")
                 return
 
             entry_long = real_pos['long']['entry_price']
             size_long_real = real_pos['long']['size']
+            print(f"       Entry: {entry_long}, Size: {size_long_real}")
+
             position.entry_price_long = entry_long
             position.long_open = True
-            position.long_fib_level = 0  # Réinitialisé à Fib 0
-            position.long_margin_previous = real_pos['long']['margin']  # Mettre à jour marge
+            position.long_fib_level = 0
+            position.long_margin_previous = real_pos['long']['margin']
 
             # ✅ 3. Placer NOUVEAU TP Long (0.3% fixe)
+            print(f"   [3/4] Placer NOUVEAU TP Long...")
             time.sleep(1)
             TP_FIXE = 0.3
             tp_long_price = entry_long * (1 + TP_FIXE / 100)
+            print(f"       TP Price: {tp_long_price}")
 
             tp_order = self.place_tpsl_order(
                 symbol=pair,
@@ -1844,29 +1869,46 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 hold_side='long',
                 size=size_long_real
             )
+            print(f"       TP Order Result: {tp_order}")
+
             if tp_order and tp_order.get('id'):
                 position.orders['tp_long'] = tp_order['id']
+                print(f"       ✓ TP Long créé: {tp_order.get('id')}")
                 logger.info(f"   ✓ Nouveau TP Long @ {self.format_price(tp_long_price, pair)} (+{TP_FIXE}%)")
+            else:
+                print(f"       ⚠️ TP Long échoué!")
 
             # ✅ 4. Placer NOUVEAU FIBO Long (Fib 1 = 0.3%)
+            print(f"   [4/4] Placer NOUVEAU FIBO Long...")
             time.sleep(1)
-            next_pct = position.fib_levels[1]  # Fib 1 = 0.3%
+            next_pct = position.fib_levels[1]
             fibo_long_price = entry_long * (1 - next_pct / 100)
+            print(f"       Fibo Price: {fibo_long_price}")
 
-            fibo_order = self.exchange.create_order(
-                symbol=pair, type='limit', side='buy', amount=size_long_real * 2,
-                price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
-            )
-            if fibo_order and fibo_order.get('id'):
-                position.orders['double_long'] = fibo_order['id']
-                logger.info(f"   ✓ Nouveau Fibo Long @ {self.format_price(fibo_long_price, pair)} (-{next_pct}%, Fib 1)")
+            try:
+                fibo_order = self.exchange.create_order(
+                    symbol=pair, type='limit', side='buy', amount=size_long_real * 2,
+                    price=fibo_long_price, params={'tradeSide': 'open', 'holdSide': 'long'}
+                )
+                print(f"       Fibo Order: {fibo_order}")
+
+                if fibo_order and fibo_order.get('id'):
+                    position.orders['double_long'] = fibo_order['id']
+                    print(f"       ✓ Fibo Long créé: {fibo_order.get('id')}")
+                    logger.info(f"   ✓ Nouveau Fibo Long @ {self.format_price(fibo_long_price, pair)} (-{next_pct}%, Fib 1)")
+            except Exception as e:
+                print(f"       ❌ ERREUR Fibo: {e}")
+                logger.error(f"   ❌ Erreur Fibo Long: {e}")
 
             position.long_size_previous = size_long_real
+            print(f"🔔 HANDLE_TP_LONG_EXECUTED DONE\n")
 
         except Exception as e:
+            print(f"❌ EXCEPTION handle_tp_long_executed: {e}")
             logger.error(f"❌ Erreur handle_tp_long_executed: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            print(traceback.format_exc())
 
     def handle_tp_short_executed(self, pair, position):
         """
