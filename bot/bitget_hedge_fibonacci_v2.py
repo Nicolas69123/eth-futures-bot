@@ -1773,15 +1773,19 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         logger.info(f"🔔 TP LONG EXÉCUTÉ - {pair}")
 
         try:
-            # ✅ 1. Annuler FIBO LONG (double_long LIMIT)
+            # ✅ 1. Annuler FIBO LONG (double_long LIMIT) - Ignorer erreurs
             print(f"   [1/4] Annuler Double Long LIMIT...")
             if position.orders.get('double_long'):
                 order_id = position.orders['double_long']
                 print(f"       Order ID: {order_id}")
-                result = self.cancel_order(order_id, pair)
-                print(f"       Résultat: {result}")
+                try:
+                    result = self.cancel_order(order_id, pair)
+                    print(f"       ✅ Annulé")
+                    logger.info(f"   ✓ Annulé Double Long LIMIT: {order_id}")
+                except Exception as e:
+                    print(f"       ⚠️ Déjà annulé ou inexistant")
+                    logger.warning(f"   ⚠️ Double Long déjà annulé: {e}")
                 position.orders['double_long'] = None
-                logger.info(f"   ✓ Annulé Double Long LIMIT: {order_id}")
             else:
                 print(f"       ⚠️ Pas d'ordre double_long trouvé!")
                 logger.warning(f"   ⚠️ Pas d'ordre double_long pour annuler")
@@ -1894,11 +1898,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         logger.info(f"🔔 TP SHORT EXÉCUTÉ - {pair}")
 
         try:
-            # ✅ 1. Annuler FIBO SHORT (double_short LIMIT)
+            # ✅ 1. Annuler FIBO SHORT (double_short LIMIT) - Ignorer erreurs
             if position.orders.get('double_short'):
-                self.cancel_order(position.orders['double_short'], pair)
+                try:
+                    self.cancel_order(position.orders['double_short'], pair)
+                    logger.info(f"   ✓ Annulé Double Short LIMIT")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Double Short déjà annulé: {e}")
                 position.orders['double_short'] = None
-                logger.info(f"   ✓ Annulé Double Short LIMIT")
 
             # ✅ 2. Réouvrir Short en MARKET
             current_price = self.get_price(pair)
@@ -1974,16 +1981,22 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         logger.info(f"⚡ FIBO LONG EXÉCUTÉ: {size_before:.0f} → {size_after:.0f} contrats")
 
         try:
-            # ✅ 1. Annuler TP LONG + Double LONG (ordres anciens)
+            # ✅ 1. Annuler TP LONG + Double LONG (ordres anciens) - Ignorer erreurs
             if position.orders.get('tp_long'):
-                self.cancel_order(position.orders['tp_long'], pair)
+                try:
+                    self.cancel_order(position.orders['tp_long'], pair)
+                    logger.info(f"   ✓ Annulé TP Long")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ TP Long déjà annulé: {e}")
                 position.orders['tp_long'] = None
-                logger.info(f"   ✓ Annulé TP Long")
 
             if position.orders.get('double_long'):
-                self.cancel_order(position.orders['double_long'], pair)
+                try:
+                    self.cancel_order(position.orders['double_long'], pair)
+                    logger.info(f"   ✓ Annulé Double Long")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Double Long déjà annulé: {e}")
                 position.orders['double_long'] = None
-                logger.info(f"   ✓ Annulé Double Long")
 
             # Récupérer position réelle depuis API
             real_pos = self.get_real_positions(pair)
@@ -2050,16 +2063,22 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
         logger.info(f"⚡ FIBO SHORT EXÉCUTÉ: {size_before:.0f} → {size_after:.0f} contrats")
 
         try:
-            # ✅ 1. Annuler TP SHORT + Double SHORT (ordres anciens)
+            # ✅ 1. Annuler TP SHORT + Double SHORT (ordres anciens) - Ignorer erreurs
             if position.orders.get('tp_short'):
-                self.cancel_order(position.orders['tp_short'], pair)
+                try:
+                    self.cancel_order(position.orders['tp_short'], pair)
+                    logger.info(f"   ✓ Annulé TP Short")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ TP Short déjà annulé: {e}")
                 position.orders['tp_short'] = None
-                logger.info(f"   ✓ Annulé TP Short")
 
             if position.orders.get('double_short'):
-                self.cancel_order(position.orders['double_short'], pair)
+                try:
+                    self.cancel_order(position.orders['double_short'], pair)
+                    logger.info(f"   ✓ Annulé Double Short")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Double Short déjà annulé: {e}")
                 position.orders['double_short'] = None
-                logger.info(f"   ✓ Annulé Double Short")
 
             # Récupérer position réelle depuis API
             real_pos = self.get_real_positions(pair)
