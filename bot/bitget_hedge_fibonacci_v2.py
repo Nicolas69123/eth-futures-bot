@@ -3022,6 +3022,8 @@ Erreurs totales: {self.error_count}
 
             # Boucle
             iteration = 0
+            last_pulse_time = time.time()
+
             while True:
                 loop_start = time.time()
 
@@ -3035,6 +3037,23 @@ Erreurs totales: {self.error_count}
                 # ✅ PRIORITÉ 3: HEALTH CHECK (toutes les 60 secondes)
                 if iteration % 60 == 0:
                     self.perform_health_check()
+
+                # 🔄 PULSE: Confirmation API appelée (toutes les 10 secondes)
+                if time.time() - last_pulse_time >= 10:
+                    last_pulse_time = time.time()
+                    pulse_msg = f"🔄 <b>API Pulse OK</b>\n"
+                    pulse_msg += f"⏰ {datetime.now().strftime('%H:%M:%S')}\n"
+                    pulse_msg += f"📊 Itération: {iteration}\n"
+                    pulse_msg += f"📍 Positions actives: {len(self.active_positions)}\n"
+
+                    # Compter les ordres totaux
+                    total_orders = 0
+                    for pos in self.active_positions.values():
+                        total_orders += sum(1 for o in pos.orders.values() if o)
+                    pulse_msg += f"📋 Ordres: {total_orders}"
+
+                    self.send_telegram(pulse_msg)
+                    logger.info(f"🔄 Pulse: Itération {iteration}, {len(self.active_positions)} positions, {total_orders} ordres")
 
                 # 📊 DEBUG: Afficher prix en temps réel (toutes les 30 secondes seulement)
                 if iteration % 30 == 0 and self.active_positions:
