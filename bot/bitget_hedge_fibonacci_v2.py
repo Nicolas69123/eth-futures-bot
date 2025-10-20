@@ -2259,33 +2259,14 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def detect_tp_long_executed(self, pair, position, real_pos):
         """
         Détecte si TP Long a été exécuté
-        Signature: Marge diminue de >50% OU position fermée
+        Signature SIMPLE: Position LONG DISPARUE = TP touché!
         """
-        if not position.long_open or not real_pos.get('long'):
-            return False
+        # Si position Long était ouverte AVANT mais n'existe PLUS maintenant = TP exécuté!
+        if position.long_open and not real_pos.get('long'):
+            print(f"🔴 TP LONG DÉTECTÉ: Position LONG DISPARUE!")
+            logger.info(f"✅ TP Long exécuté: Position fermée (disparue)")
+            return True
 
-        long_margin_now = real_pos['long']['margin']
-        long_margin_prev = position.long_margin_previous
-
-        # DEBUG
-        margin_decrease_pct = 0
-        if long_margin_prev > 0:
-            margin_decrease_pct = ((long_margin_prev - long_margin_now) / long_margin_prev) * 100
-
-        # Si marge diminue de plus de 50% = TP touché
-        if long_margin_prev > 0:
-            if margin_decrease_pct > 50:
-                print(f"🔴 DÉTECTEUR TP LONG DÉCLENCHÉ!")
-                print(f"    Marge prev: {long_margin_prev:.4f}")
-                print(f"    Marge now: {long_margin_now:.4f}")
-                print(f"    Diminution: {margin_decrease_pct:.1f}%")
-                logger.info(f"✅ TP Long exécuté: marge {long_margin_prev:.2f} → {long_margin_now:.2f} (-{margin_decrease_pct:.0f}%)")
-                return True
-            # else:
-            #     print(f"   [DEBUG] TP LONG: {margin_decrease_pct:.1f}% < 50% (no trigger)")
-
-        # Mettre à jour pour prochaine vérification
-        position.long_margin_previous = long_margin_now
         return False
 
     def detect_tp_short_executed(self, pair, position, real_pos):
