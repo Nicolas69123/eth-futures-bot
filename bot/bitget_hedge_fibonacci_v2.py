@@ -2265,13 +2265,24 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             return False
 
         long_margin_now = real_pos['long']['margin']
+        long_margin_prev = position.long_margin_previous
+
+        # DEBUG
+        margin_decrease_pct = 0
+        if long_margin_prev > 0:
+            margin_decrease_pct = ((long_margin_prev - long_margin_now) / long_margin_prev) * 100
 
         # Si marge diminue de plus de 50% = TP touché
-        if position.long_margin_previous > 0:
-            margin_decrease_pct = ((position.long_margin_previous - long_margin_now) / position.long_margin_previous) * 100
+        if long_margin_prev > 0:
             if margin_decrease_pct > 50:
-                logger.info(f"✅ TP Long exécuté: marge {position.long_margin_previous:.2f} → {long_margin_now:.2f} (-{margin_decrease_pct:.0f}%)")
+                print(f"🔴 DÉTECTEUR TP LONG DÉCLENCHÉ!")
+                print(f"    Marge prev: {long_margin_prev:.4f}")
+                print(f"    Marge now: {long_margin_now:.4f}")
+                print(f"    Diminution: {margin_decrease_pct:.1f}%")
+                logger.info(f"✅ TP Long exécuté: marge {long_margin_prev:.2f} → {long_margin_now:.2f} (-{margin_decrease_pct:.0f}%)")
                 return True
+            # else:
+            #     print(f"   [DEBUG] TP LONG: {margin_decrease_pct:.1f}% < 50% (no trigger)")
 
         # Mettre à jour pour prochaine vérification
         position.long_margin_previous = long_margin_now
@@ -2349,48 +2360,60 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 # Récupérer l'état RÉEL de l'API
                 real_pos = self.get_real_positions(pair)
                 if not real_pos:
+                    print(f"[{iteration}] ⚠️ get_real_positions retourne None pour {pair}")
                     continue
 
                 # ⚙️ INITIALISATION PREMIÈRE ITÉRATION (valeurs _previous à 0)
                 if position.long_margin_previous == 0 and real_pos.get('long'):
                     position.long_margin_previous = real_pos['long']['margin']
                     position.long_size_previous = real_pos['long']['size']
+                    print(f"[{iteration}] ✓ INIT Long margin: {position.long_margin_previous:.4f}")
 
                 if position.short_margin_previous == 0 and real_pos.get('short'):
                     position.short_margin_previous = real_pos['short']['margin']
                     position.short_size_previous = real_pos['short']['size']
+                    print(f"[{iteration}] ✓ INIT Short margin: {position.short_margin_previous:.4f}")
 
                 # ✅ ÉVÉNEMENT 1: TP LONG EXÉCUTÉ
-                if self.detect_tp_long_executed(pair, position, real_pos):
+                tp_long_detected = self.detect_tp_long_executed(pair, position, real_pos)
+                if tp_long_detected:
+                    print(f"[{iteration}] 🔴🔴🔴 TP LONG DÉTECTÉ - DÉCLENCHER HANDLER! 🔴🔴🔴")
                     self.handle_tp_long_executed(pair, position)
                     time.sleep(1)
                     self.send_position_message(pair, position)  # Message Telegram
                     continue
 
                 # ✅ ÉVÉNEMENT 2: TP SHORT EXÉCUTÉ
-                if self.detect_tp_short_executed(pair, position, real_pos):
+                tp_short_detected = self.detect_tp_short_executed(pair, position, real_pos)
+                if tp_short_detected:
+                    print(f"[{iteration}] 🔴🔴🔴 TP SHORT DÉTECTÉ - DÉCLENCHER HANDLER! 🔴🔴🔴")
                     self.handle_tp_short_executed(pair, position)
                     time.sleep(1)
                     self.send_position_message(pair, position)  # Message Telegram
                     continue
 
                 # ✅ ÉVÉNEMENT 3: FIBO LONG EXÉCUTÉ
-                if self.detect_fibo_long_executed(pair, position, real_pos):
+                fibo_long_detected = self.detect_fibo_long_executed(pair, position, real_pos)
+                if fibo_long_detected:
+                    print(f"[{iteration}] 🟡🟡🟡 FIBO LONG DÉTECTÉ - DÉCLENCHER HANDLER! 🟡🟡🟡")
                     self.handle_fibo_long_executed(pair, position, position.long_size_previous, real_pos['long']['size'])
-                    position.long_size_previous = real_pos['long']['size']  # Mettre à jour size_previous
+                    position.long_size_previous = real_pos['long']['size']
                     time.sleep(1)
-                    self.send_position_message(pair, position)  # Message Telegram
+                    self.send_position_message(pair, position)
                     continue
 
                 # ✅ ÉVÉNEMENT 4: FIBO SHORT EXÉCUTÉ
-                if self.detect_fibo_short_executed(pair, position, real_pos):
+                fibo_short_detected = self.detect_fibo_short_executed(pair, position, real_pos)
+                if fibo_short_detected:
+                    print(f"[{iteration}] 🟡🟡🟡 FIBO SHORT DÉTECTÉ - DÉCLENCHER HANDLER! 🟡🟡🟡")
                     self.handle_fibo_short_executed(pair, position, position.short_size_previous, real_pos['short']['size'])
-                    position.short_size_previous = real_pos['short']['size']  # Mettre à jour size_previous
+                    position.short_size_previous = real_pos['short']['size']
                     time.sleep(1)
-                    self.send_position_message(pair, position)  # Message Telegram
+                    self.send_position_message(pair, position)
                     continue
 
             except Exception as e:
+                print(f"❌ EXCEPTION check_orders_status {pair}: {e}")
                 logger.error(f"Erreur check_orders_status {pair}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
