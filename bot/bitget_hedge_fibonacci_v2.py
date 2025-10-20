@@ -2601,18 +2601,49 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             self.send_telegram(alert_msg)
             print("⚠️ ATTENTION: Cleanup incomplet, voir logs")
 
-            # Essayer une deuxième fois plus agressive
-            print("🔄 Tentative de cleanup forcé supplémentaire...")
-            for pair in self.volatile_pairs:
-                try:
-                    positions = self.exchange.fetch_positions(symbols=[pair])
-                    for pos in positions:
-                        if float(pos.get('contracts', 0)) > 0:
-                            side = pos.get('side', '').lower()
-                            self.flash_close_position(pair, side)
-                            time.sleep(1)
-                except:
-                    pass
+            # Essayer jusqu'à 5 fois pour fermer TOUTES les positions restantes
+            print("🔄 Cleanup agressif - Retry jusqu'à fermeture complète...")
+            logger.warning("⚠️ Cleanup incomplet détecté - Démarrage retry agressif")
+
+            max_retries = 5
+            for retry in range(max_retries):
+                print(f"   Tentative {retry + 1}/{max_retries}...")
+
+                positions_still_open = False
+                for pair in self.volatile_pairs:
+                    try:
+                        positions = self.exchange.fetch_positions(symbols=[pair])
+                        for pos in positions:
+                            size = float(pos.get('contracts', 0))
+                            if size > 0:
+                                positions_still_open = True
+                                side = pos.get('side', '').lower()
+                                print(f"      🔴 Retry {side.upper()} {pair}: {size} contrats")
+                                logger.info(f"   Retry Flash Close {side} {pair}: {size} contrats")
+
+                                self.flash_close_position(pair, side)
+                                time.sleep(2)
+
+                                # Vérifier immédiatement
+                                verify = self.exchange.fetch_positions(symbols=[pair])
+                                for vpos in verify:
+                                    if vpos.get('side', '').lower() == side:
+                                        remaining = float(vpos.get('contracts', 0))
+                                        if remaining == 0:
+                                            print(f"      ✅ {side.upper()} {pair} FERMÉ!")
+                                            logger.info(f"   ✅ {side} {pair} fermé après retry")
+                                        else:
+                                            print(f"      ⚠️ {side.upper()} {pair}: {remaining} reste encore")
+                    except Exception as e:
+                        logger.error(f"   Erreur retry cleanup {pair}: {e}")
+                        pass
+
+                if not positions_still_open:
+                    print("   ✅ Toutes positions fermées!")
+                    logger.info("✅ Cleanup retry réussi - Toutes positions fermées")
+                    break
+
+                time.sleep(2)
         else:
             print("✅ Vérification finale: TOUT est fermé!")
             logger.info("✅ Cleanup complet vérifié - aucune position ni ordre restant")
