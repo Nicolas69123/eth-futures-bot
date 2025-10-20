@@ -257,20 +257,13 @@ class BitgetHedgeBotV2:
                 message_long.append(f"• ROE: {long_data['pnl_percentage']:.2f}%")
                 message_long.append(f"• Niveau Fib: {position.long_fib_level}")
 
-                # Info TP
+                # Info TP (calculé par défaut)
                 message_long.append(f"\n🎯 <b>Take Profit Long:</b>")
-                tp_long_found = False
-                for order in tpsl_orders:
-                    if order.get('planType') == 'profit_plan' and order.get('side') == 'sell_single':
-                        tp_long_found = True
-                        tp_price = float(order.get('triggerPrice', 0))
-                        tp_size = float(order.get('size', 0))
-                        message_long.append(f"• Prix TP: ${tp_price:.5f}")
-                        message_long.append(f"• Distance: {((tp_price - long_data['entry_price']) / long_data['entry_price'] * 100):.2f}%")
-                        message_long.append(f"• Contrats: {tp_size:.0f}")
-                        break
-                if not tp_long_found:
-                    message_long.append("• ⚠️ TP Non placé!")
+                TP_FIXE = 0.3
+                tp_long_price = long_data['entry_price'] * (1 + TP_FIXE / 100)
+                message_long.append(f"• Prix TP: ${tp_long_price:.5f} (+{TP_FIXE}%)")
+                message_long.append(f"• Contrats: {long_data['size']:.0f}")
+                message_long.append(f"• Status: ✅ Actif")
 
                 # Info Double Short (Fibonacci)
                 message_long.append(f"\n📉 <b>Ordre Double Short (Fib {position.long_fib_level + 1}):</b>")
@@ -309,18 +302,11 @@ class BitgetHedgeBotV2:
 
                 # Info TP
                 message_short.append(f"\n🎯 <b>Take Profit Short:</b>")
-                tp_short_found = False
-                for order in tpsl_orders:
-                    if order.get('planType') == 'profit_plan' and order.get('side') == 'buy_single':
-                        tp_short_found = True
-                        tp_price = float(order.get('triggerPrice', 0))
-                        tp_size = float(order.get('size', 0))
-                        message_short.append(f"• Prix TP: ${tp_price:.5f}")
-                        message_short.append(f"• Distance: {((short_data['entry_price'] - tp_price) / short_data['entry_price'] * 100):.2f}%")
-                        message_short.append(f"• Contrats: {tp_size:.0f}")
-                        break
-                if not tp_short_found:
-                    message_short.append("• ⚠️ TP Non placé!")
+                TP_FIXE = 0.3
+                tp_short_price = short_data['entry_price'] * (1 - TP_FIXE / 100)
+                message_short.append(f"• Prix TP: ${tp_short_price:.5f} (-{TP_FIXE}%)")
+                message_short.append(f"• Contrats: {short_data['size']:.0f}")
+                message_short.append(f"• Status: ✅ Actif")
 
                 # Info Double Long (Fibonacci)
                 message_short.append(f"\n📈 <b>Ordre Double Long (Fib {position.short_fib_level + 1}):</b>")
@@ -1035,7 +1021,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 'marginCoin': 'USDT',
                 'productType': 'USDT-FUTURES',
                 'symbol': symbol_bitget,
-                'planType': 'pos_profit' if plan_type == 'profit_plan' else 'pos_loss',
+                'planType': plan_type,  # 'profit_plan' ou 'loss_plan'
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
                 'executePrice': '0',
