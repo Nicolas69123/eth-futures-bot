@@ -1017,7 +1017,8 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
 
             # Endpoint et body (V2 - CORRECT!)
             endpoint = '/api/v2/mix/order/place-tpsl-order'
-            # Important: Size MUST be integer for TP/SL orders (Bitget requires checkScale=0)
+            # Important: Size MUST match exactly what Bitget has in position
+            # Do NOT round - use size as-is (already an integer from API)
             body = {
                 'symbol': symbol_bitget,
                 'marginCoin': 'USDT',
@@ -1026,7 +1027,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
                 'holdSide': hold_side,
-                'size': str(int(round(size)))  # FIX: Must be integer, not float!
+                'size': str(int(size))  # Convert to int, no rounding
             }
             body_json = json.dumps(body)
 
