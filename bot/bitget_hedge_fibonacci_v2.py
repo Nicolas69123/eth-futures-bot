@@ -1016,17 +1016,15 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             trigger_price_rounded = self.round_price(trigger_price, symbol)
 
             # Endpoint et body
-            endpoint = '/api/v2/mix/order/place-tpsl-order'
+            endpoint = '/api/mix/v1/order/place-tpsl-order'
             body = {
-                'marginCoin': 'USDT',
-                'productType': 'USDT-FUTURES',
                 'symbol': symbol_bitget,
                 'planType': plan_type,  # 'profit_plan' ou 'loss_plan'
                 'triggerPrice': str(trigger_price_rounded),
                 'triggerType': 'mark_price',
-                'executePrice': '0',
                 'holdSide': hold_side,
-                'size': str(round(size, 2))  # Arrondir à 2 décimales
+                'size': str(round(size, 2)),  # Arrondir à 2 décimales
+                'executePrice': '0'
             }
             body_json = json.dumps(body)
 
