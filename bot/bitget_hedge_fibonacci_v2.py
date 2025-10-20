@@ -1257,7 +1257,7 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
     def get_tpsl_orders(self, symbol):
         """Récupère les ordres TP/SL plan en cours via HTTP direct"""
         try:
-            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '').lower()
+            symbol_bitget = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')  # Majuscules (DOGEUSDT)
 
             # Endpoint (sans query params dans le path pour la signature)
             endpoint_path = '/api/v2/mix/order/orders-plan-pending'
@@ -2139,33 +2139,62 @@ Le bot sera complètement arrêté et devra être relancé manuellement.
             else:
                 message += f"🔴 SHORT | Fermé\n"
 
-            # === ORDRES ===
+            # === ORDRES (AFFICHER LES PRIX RÉELS) ===
             message += f"\n📋 <b>Ordres Actifs:</b>\n"
 
+            # Récupérer les ordres TP/SL RÉELS depuis Bitget
+            tpsl_orders = self.get_tpsl_orders(pair)
+
             # TP Long
+            tp_long_found = False
             if position.orders.get('tp_long'):
-                message += f"🎯 TP Long (Fib {position.long_fib_level})\n"
-            else:
+                for order in tpsl_orders:
+                    if order.get('holdSide') == 'long' and order.get('planType') == 'pos_profit':
+                        tp_price = float(order.get('triggerPrice', 0))
+                        message += f"🎯 TP Long @ {self.format_price(tp_price, pair)} (+0.3%)\n"
+                        tp_long_found = True
+                        break
+            if not tp_long_found:
                 message += f"🎯 TP Long | -\n"
 
-            # Fibo Long
+            # Fibo Long (Ordre LIMIT)
+            fibo_long_found = False
             if position.orders.get('double_long'):
-                next_pct = position.fib_levels[position.long_fib_level + 1] if position.long_fib_level + 1 < len(position.fib_levels) else 0
-                message += f"📦 Fibo Long (Fib {position.long_fib_level + 1}, {next_pct:.2f}%)\n"
-            else:
+                open_orders = self.exchange.fetch_open_orders(symbol=pair)
+                for order in open_orders:
+                    if order.get('side') == 'buy' and order.get('type') == 'limit':
+                        fibo_price = float(order.get('price', 0))
+                        next_pct = position.fib_levels[position.long_fib_level + 1] if position.long_fib_level + 1 < len(position.fib_levels) else 0
+                        message += f"📦 Fibo Long @ {self.format_price(fibo_price, pair)} (-{next_pct:.2f}%)\n"
+                        fibo_long_found = True
+                        break
+            if not fibo_long_found:
                 message += f"📦 Fibo Long | -\n"
 
             # TP Short
+            tp_short_found = False
             if position.orders.get('tp_short'):
-                message += f"🎯 TP Short (Fib {position.short_fib_level})\n"
-            else:
+                for order in tpsl_orders:
+                    if order.get('holdSide') == 'short' and order.get('planType') == 'pos_profit':
+                        tp_price = float(order.get('triggerPrice', 0))
+                        message += f"🎯 TP Short @ {self.format_price(tp_price, pair)} (-0.3%)\n"
+                        tp_short_found = True
+                        break
+            if not tp_short_found:
                 message += f"🎯 TP Short | -\n"
 
-            # Fibo Short
+            # Fibo Short (Ordre LIMIT)
+            fibo_short_found = False
             if position.orders.get('double_short'):
-                next_pct = position.fib_levels[position.short_fib_level + 1] if position.short_fib_level + 1 < len(position.fib_levels) else 0
-                message += f"📦 Fibo Short (Fib {position.short_fib_level + 1}, {next_pct:.2f}%)\n"
-            else:
+                open_orders = self.exchange.fetch_open_orders(symbol=pair)
+                for order in open_orders:
+                    if order.get('side') == 'sell' and order.get('type') == 'limit':
+                        fibo_price = float(order.get('price', 0))
+                        next_pct = position.fib_levels[position.short_fib_level + 1] if position.short_fib_level + 1 < len(position.fib_levels) else 0
+                        message += f"📦 Fibo Short @ {self.format_price(fibo_price, pair)} (+{next_pct:.2f}%)\n"
+                        fibo_short_found = True
+                        break
+            if not fibo_short_found:
                 message += f"📦 Fibo Short | -\n"
 
             message += f"\n⏰ {datetime.now().strftime('%H:%M:%S')}"
