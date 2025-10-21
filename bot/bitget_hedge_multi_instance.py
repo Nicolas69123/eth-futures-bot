@@ -66,15 +66,20 @@ class Position:
 class BitgetHedgeBotV2Fixed:
     """Production bot with Telegram notifications and 0.5% TP"""
 
-    def __init__(self, pair='DOGE/USDT:USDT'):
+    def __init__(self, pair='DOGE/USDT:USDT', api_key_id=1):
         logger.info("="*80)
-        logger.info(f"🤖 BITGET HEDGE BOT - MULTI-INSTANCE ({pair.split('/')[0]})")
+        logger.info(f"🤖 BITGET HEDGE BOT - MULTI-INSTANCE ({pair.split('/')[0]}) [API Key {api_key_id}]")
         logger.info("="*80)
 
-        # API credentials
-        self.api_key = os.getenv('BITGET_API_KEY')
-        self.api_secret = os.getenv('BITGET_SECRET')
-        self.api_password = os.getenv('BITGET_PASSPHRASE')
+        # API credentials - Load based on api_key_id
+        if api_key_id == 2:
+            self.api_key = os.getenv('BITGET_API_KEY_2')
+            self.api_secret = os.getenv('BITGET_SECRET_2')
+            self.api_password = os.getenv('BITGET_PASSPHRASE_2')
+        else:
+            self.api_key = os.getenv('BITGET_API_KEY')
+            self.api_secret = os.getenv('BITGET_SECRET')
+            self.api_password = os.getenv('BITGET_PASSPHRASE')
 
         # Telegram credentials
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -104,12 +109,16 @@ class BitgetHedgeBotV2Fixed:
 
         # Parameters
         self.PAIR = pair
-        self.INITIAL_MARGIN = 5  # $5 par position
         self.LEVERAGE = 50
 
         # TP and Fibo levels
         self.TP_PERCENT = 0.5  # 0.5% TP
         self.FIBO_LEVELS = [0.3, 0.6, 1.0, 1.5, 2.0]  # First level: 0.3%
+
+        # Calculate minimum margin for this pair
+        logger.info(f"\n🔍 Calcul marge minimale pour {self.PAIR.split('/')[0]}...")
+        self.INITIAL_MARGIN = self.calculate_min_margin()
+        logger.info(f"   ✅ Marge adaptée: ${self.INITIAL_MARGIN}")
 
         # Position tracking
         self.position = Position(self.PAIR)
@@ -119,11 +128,64 @@ class BitgetHedgeBotV2Fixed:
         self.telegram_check_interval = 5  # Check toutes les 5 secondes
         self.last_telegram_check = 0
 
+        logger.info(f"\n📊 Configuration:")
         logger.info(f"Paire: {self.PAIR}")
         logger.info(f"TP: {self.TP_PERCENT}%")
         logger.info(f"Fibo levels: {self.FIBO_LEVELS}")
         logger.info(f"Initial margin: ${self.INITIAL_MARGIN}")
         logger.info(f"Leverage: {self.LEVERAGE}x")
+
+    def calculate_min_margin(self):
+        """
+        Calculate minimum margin required for this pair
+        Returns margin with 2x safety factor
+        """
+        try:
+            # Load markets
+            markets = self.exchange.load_markets()
+
+            if self.PAIR not in markets:
+                logger.warning(f"   ⚠️ Paire non trouvée dans markets, utilise $5 par défaut")
+                return 5
+
+            market = markets[self.PAIR]
+            ticker = self.exchange.fetch_ticker(self.PAIR)
+            current_price = float(ticker['last'])
+
+            # Get limits
+            min_amount = market['limits']['amount'].get('min', 0)
+            min_cost = market['limits']['cost'].get('min', 0)
+
+            # Calculate min margin
+            if min_amount:
+                min_margin_amount = (min_amount * current_price) / self.LEVERAGE
+            else:
+                min_margin_amount = 0
+
+            if min_cost:
+                min_margin_cost = min_cost / self.LEVERAGE
+            else:
+                min_margin_cost = 0
+
+            min_margin = max(min_margin_amount, min_margin_cost, 1)  # Au moins $1
+
+            # Apply 3x safety factor (pour éviter rejets)
+            recommended_margin = min_margin * 3
+
+            # Round to nearest dollar
+            recommended_margin = max(5, round(recommended_margin))
+
+            logger.info(f"   📊 Prix: ${current_price:.5f}")
+            logger.info(f"   📊 Min amount: {min_amount} | Min cost: ${min_cost}")
+            logger.info(f"   📊 Marge min calculée: ${min_margin:.2f}")
+            logger.info(f"   📊 Marge recommandée (3x): ${recommended_margin}")
+
+            return recommended_margin
+
+        except Exception as e:
+            logger.error(f"   ❌ Erreur calcul marge: {e}")
+            logger.warning(f"   ⚠️ Utilise $5 par défaut")
+            return 5
 
     def send_telegram(self, message):
         """Envoie message Telegram"""
@@ -191,9 +253,9 @@ class BitgetHedgeBotV2Fixed:
             logger.error(f"Erreur send_detailed_position_update: {e}")
 
     def cleanup_all(self):
-        """Clean all positions and orders with retry loop"""
+        """Clean ALL positions and orders on the account (all pairs) with retry loop"""
         logger.info("\n" + "="*80)
-        logger.info("🧹 CLEANUP AGRESSIF - FERMETURE DE TOUT")
+        logger.info("🧹 CLEANUP AGRESSIF - FERMETURE TOUT LE COMPTE (TOUTES PAIRES)")
         logger.info("="*80)
 
         max_retries = 5
@@ -204,51 +266,71 @@ class BitgetHedgeBotV2Fixed:
             all_clean = True
 
             try:
-                # 1. Close all positions with MARKET orders
-                positions = self.exchange.fetch_positions(symbols=[self.PAIR])
+                # 1. Close ALL positions on account (not just self.PAIR)
+                positions = self.exchange.fetch_positions()  # TOUTES les paires
                 for pos in positions:
                     size = float(pos.get('contracts', 0))
                     if size > 0:
-                        all_clean = False
                         side = pos.get('side', '').lower()
-                        logger.info(f"   🔴 Fermeture {side.upper()}: {size} contrats")
+                        symbol = pos.get('symbol')
+                        pair_short = symbol.split('/')[0] if '/' in symbol else symbol[:4]
+                        logger.info(f"   🔴 {pair_short} {side.upper()}: {size} contrats")
 
-                        # Close with MARKET order (more reliable than Flash Close)
+                        # Ignore micro-positions < 1 (Bitget glitches)
+                        if size < 1:
+                            logger.info(f"      ✅ Micro-position ignorée ({size})")
+                            continue
+
+                        # Try to close
                         market_side = 'sell' if side == 'long' else 'buy'
+                        closed_ok = False
                         try:
                             close_order = self.exchange.create_order(
-                                symbol=self.PAIR,
+                                symbol=symbol,  # Use position's symbol
                                 type='market',
                                 side=market_side,
                                 amount=size,
                                 params={'tradeSide': 'close', 'holdSide': side}
                             )
                             logger.info(f"      ✅ Ordre fermeture MARKET: {close_order['id']}")
+                            closed_ok = True
+                            time.sleep(2)
                         except Exception as e:
-                            logger.error(f"      ❌ Erreur fermeture: {e}")
-
-                        time.sleep(2)
+                            # Error 22002 = No position to close (already closed by another process)
+                            if '"code":"22002"' in str(e):
+                                logger.info(f"      ✅ {side.upper()} déjà fermé (22002) - skip")
+                                continue  # Don't verify, API has glitch - consider closed
+                            else:
+                                logger.error(f"      ❌ Erreur fermeture: {e}")
+                                all_clean = False
+                                time.sleep(2)
+                                continue
 
                         # Verify closed
-                        verify = self.exchange.fetch_positions(symbols=[self.PAIR])
-                        for vpos in verify:
-                            if vpos.get('side', '').lower() == side:
-                                remaining = float(vpos.get('contracts', 0))
-                                if remaining > 0:
-                                    logger.warning(f"   ⚠️ {side.upper()}: {remaining} reste encore")
-                                    all_clean = False
-                                else:
-                                    logger.info(f"   ✅ {side.upper()} fermé!")
+                        if closed_ok:
+                            verify = self.exchange.fetch_positions(symbols=[symbol])
+                            still_open = False
+                            for vpos in verify:
+                                if vpos.get('side', '').lower() == side:
+                                    remaining = float(vpos.get('contracts', 0))
+                                    if remaining >= 1:
+                                        logger.warning(f"   ⚠️ {pair_short} {side.upper()}: {remaining} reste")
+                                        all_clean = False
+                                        still_open = True
+                            if not still_open:
+                                logger.info(f"   ✅ {pair_short} {side.upper()} fermé!")
 
-                # 2. Cancel all orders
-                open_orders = self.exchange.fetch_open_orders(symbol=self.PAIR)
+                # 2. Cancel ALL orders on account (all pairs)
+                open_orders = self.exchange.fetch_open_orders()  # TOUS les ordres
                 if open_orders:
                     all_clean = False
-                    logger.info(f"\n   🗑️  Annulation de {len(open_orders)} ordres...")
+                    logger.info(f"\n   🗑️  Annulation de {len(open_orders)} ordres (toutes paires)...")
                     for order in open_orders:
                         try:
-                            logger.info(f"      - {order['type']} {order['side']}: {order['id'][:12]}...")
-                            self.exchange.cancel_order(order['id'], self.PAIR)
+                            order_symbol = order.get('symbol')
+                            order_pair_short = order_symbol.split('/')[0] if '/' in order_symbol else order_symbol[:4]
+                            logger.info(f"      - {order_pair_short} {order['type']} {order['side']}: {order['id'][:12]}...")
+                            self.exchange.cancel_order(order['id'], order_symbol)
                             time.sleep(0.3)
                         except Exception as e:
                             logger.warning(f"      ⚠️ Erreur annulation: {e}")
@@ -339,7 +421,16 @@ class BitgetHedgeBotV2Fixed:
 
                 logger.info(f"      Retry {attempt + 1}: Ajustement prix → ${current_price:.5f}")
 
-            trigger_price_rounded = round(current_price, 5)
+            # Round price based on pair value (checkScale varies by pair)
+            if current_price >= 100:
+                # ETH, BTC, etc: 2 decimals (checkScale=2)
+                trigger_price_rounded = round(current_price, 2)
+            elif current_price >= 1:
+                # Mid-price pairs: 4 decimals (checkScale=4)
+                trigger_price_rounded = round(current_price, 4)
+            else:
+                # DOGE, low-price: 5 decimals (checkScale=5)
+                trigger_price_rounded = round(current_price, 5)
 
             body = {
                 'marginCoin': 'USDT',
@@ -428,13 +519,22 @@ class BitgetHedgeBotV2Fixed:
             )
             logger.info(f"   ✅ SHORT ouvert: {short_order['id']}")
 
-            # Wait and get real positions
-            logger.info("\n⏳ Attente 5s puis récupération positions...")
-            time.sleep(5)
-            real_pos = self.get_real_positions()
+            # Wait and get real positions (with retry)
+            logger.info("\n⏳ Attente positions (retry si nécessaire)...")
+            real_pos = None
+            max_retries = 10
+            for attempt in range(max_retries):
+                time.sleep(3)
+                real_pos = self.get_real_positions()
 
-            if not real_pos['long'] or not real_pos['short']:
-                logger.error("❌ Impossible de récupérer positions!")
+                if real_pos['long'] and real_pos['short']:
+                    logger.info(f"   ✅ Positions récupérées (tentative {attempt + 1})")
+                    break
+                else:
+                    logger.warning(f"   ⏳ Tentative {attempt + 1}/{max_retries}: Positions pas encore visibles...")
+
+            if not real_pos or not real_pos['long'] or not real_pos['short']:
+                logger.error("❌ Impossible de récupérer positions après 10 tentatives!")
                 return False
 
             entry_long = real_pos['long']['entry_price']
@@ -1325,14 +1425,12 @@ Pour confirmer, tapez:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         self.send_telegram(startup_msg)
 
-        # CLEANUP AUTOMATIQUE OBLIGATOIRE AU DÉMARRAGE
+        # CLEANUP AUTOMATIQUE AU DÉMARRAGE (non-bloquant)
         logger.info("\n🧹 CLEANUP AUTOMATIQUE AU DÉMARRAGE...")
         cleanup_ok = self.cleanup_all()
         if not cleanup_ok:
-            logger.error("❌ CLEANUP ÉCHOUÉ - BOT ARRÊTÉ POUR SÉCURITÉ")
-            logger.error("   Vérifiez manuellement sur Bitget et fermez les positions restantes")
-            self.send_telegram("❌ <b>CLEANUP ÉCHOUÉ</b>\n\nBot arrêté. Vérifiez Bitget manuellement.")
-            return
+            logger.warning("⚠️ CLEANUP INCOMPLET - Continue quand même (positions zombies ignorées)")
+            self.send_telegram(f"⚠️ <b>CLEANUP INCOMPLET</b>\n\nBot {self.PAIR.split('/')[0]} démarre quand même\n(Positions zombies < 1 contrat ignorées)")
 
         time.sleep(3)
 
@@ -1395,10 +1493,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Bitget Hedge Bot - Multi-Instance')
     parser.add_argument('--pair', type=str, default='DOGE/USDT:USDT',
                         help='Trading pair (ex: DOGE/USDT:USDT, ETH/USDT:USDT)')
+    parser.add_argument('--api-key-id', type=int, default=1, choices=[1, 2],
+                        help='API Key ID to use (1 or 2)')
     args = parser.parse_args()
 
     try:
-        bot = BitgetHedgeBotV2Fixed(pair=args.pair)
+        bot = BitgetHedgeBotV2Fixed(pair=args.pair, api_key_id=args.api_key_id)
         bot.run()
     except Exception as e:
         logger.error(f"❌ Erreur fatale: {e}")

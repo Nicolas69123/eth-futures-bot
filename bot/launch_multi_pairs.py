@@ -9,32 +9,34 @@ import subprocess
 import time
 import sys
 
-# Paires à trader
+# Paires à trader - 2 paires avec 2 clés API (1 par clé)
+# API Key 1: DOGE
+# API Key 2: ETH
 PAIRS = [
-    'DOGE/USDT:USDT',
-    'PEPE/USDT:USDT',
-    'SHIB/USDT:USDT',
-    'ETH/USDT:USDT',
-    'SOL/USDT:USDT',
-    'AVAX/USDT:USDT',
+    {'pair': 'DOGE/USDT:USDT', 'api_key_id': 1},
+    {'pair': 'ETH/USDT:USDT', 'api_key_id': 2},
 ]
 
 print("="*80)
-print("🚀 LANCEMENT MULTI-PAIRES - 6 INSTANCES")
+print(f"🚀 LANCEMENT MULTI-PAIRES - {len(PAIRS)} INSTANCES (2 API Keys)")
 print("="*80)
-print(f"\nPaires: {', '.join([p.split('/')[0] for p in PAIRS])}\n")
+print(f"\nPaires: {', '.join([p['pair'].split('/')[0] for p in PAIRS])}")
+print(f"API Key 1: {', '.join([p['pair'].split('/')[0] for p in PAIRS if p['api_key_id'] == 1])}")
+print(f"API Key 2: {', '.join([p['pair'].split('/')[0] for p in PAIRS if p['api_key_id'] == 2])}\n")
 
 # Store processes
 processes = []
 
 # Launch each instance
-for pair in PAIRS:
+for p in PAIRS:
+    pair = p['pair']
+    api_key_id = p['api_key_id']
     pair_short = pair.split('/')[0]
-    print(f"🔄 Lancement bot {pair_short}...")
+    print(f"🔄 Lancement bot {pair_short} (API Key {api_key_id})...")
 
     # Launch in background
     process = subprocess.Popen(
-        [sys.executable, 'bot/bitget_hedge_multi_instance.py', '--pair', pair],
+        [sys.executable, 'bot/bitget_hedge_multi_instance.py', '--pair', pair, '--api-key-id', str(api_key_id)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -46,8 +48,8 @@ for pair in PAIRS:
         'pid': process.pid
     })
 
-    print(f"   ✅ PID {process.pid} - {pair_short}")
-    time.sleep(1)  # Petit délai entre chaque lancement
+    print(f"   ✅ PID {process.pid} - {pair_short} (API Key {api_key_id})")
+    time.sleep(10)  # 10s entre chaque lancement (évite rate limits)
 
 print("\n" + "="*80)
 print("✅ TOUTES LES INSTANCES LANCÉES")

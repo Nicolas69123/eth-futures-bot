@@ -1,10 +1,282 @@
 # Avancement du Projet - Trading Bot
 
-> **Dernière mise à jour** : 2025-10-20 (Session 4 - FIX MAJEUR Cleanup + Size correct)
+> **Dernière mise à jour** : 2025-10-21 (Session 5 - Développement Système Multi-Instances)
 
 ---
 
-## 🎯 Session Actuelle - 2025-10-20 (Session 4)
+## 🎯 Session Actuelle - 2025-10-21 (Session 5)
+
+**Date** : 2025-10-21 09:00-15:00 UTC
+**Focus** : Développement système multi-instances (6 paires simultanées)
+**Status** : 🔶 EN COURS - Système fonctionnel mais rate limits Bitget
+
+### 🚀 Objectif Session
+
+Passer de **1 paire (DOGE)** à **6 paires simultanées** (DOGE, PEPE, SHIB, ETH, SOL, AVAX) pour maximiser opportunités de trading.
+
+### 📦 Développements Réalisés
+
+#### Fichiers Créés (Commit 99ec645)
+
+1. **bot/bitget_hedge_multi_instance.py**
+   - Bot acceptant arguments `--pair` et `--api-key-id`
+   - Basé sur V2_fixed (tous les fixes appliqués)
+   - Support 2 clés API pour répartir rate limits
+
+2. **bot/launch_multi_pairs.py**
+   - Launcher Python gérant N instances
+   - Monitoring centralisé
+   - Graceful shutdown (Ctrl+C)
+
+3. **bot/find_volatile_pairs.py**
+   - Analyse volatilité 24h top 20 paires
+   - Score = changement % × log(volume)
+   - Auto-sélection meilleures paires
+
+4. **Scripts utilitaires**
+   - check_positions.py (vérifier positions ouvertes)
+   - check_orders.py (vérifier ordres LIMIT)
+   - check_market_limits.py (marges min par paire)
+   - clear_telegram_updates.py (vider commandes Telegram)
+
+5. **MULTI-PAIRS-README.md**
+   - Documentation complète système multi-instances
+
+#### Création 2ème Clé API Bitget
+
+**Objectif** : Doubler les rate limits en répartissant paires sur 2 clés
+
+**Ajouté dans .env** :
+```
+BITGET_API_KEY_2=bg_b45ccc1f3971f9b8845055369dbf1676
+BITGET_SECRET_2=a34e96ddb02a708ffc4f048d5842f2c0f4fffea84038575c0e849b2d977514aa
+BITGET_PASSPHRASE_2=Nicolas2003
+```
+
+**Répartition prévue** :
+- API Key 1: DOGE, PEPE, SHIB
+- API Key 2: ETH, SOL, AVAX
+
+### 🐛 Problèmes Rencontrés
+
+#### 1. Rate Limits Bitget (Code 429)
+
+**Tests effectués** :
+- ✅ 1 paire : Fonctionne
+- ❌ 4 paires (délai 10s) : 2 crashent (rate limit)
+- ❌ 6 paires (délai 10s) : 4 crashent (rate limit)
+
+**Erreur** :
+```
+ccxt.base.errors.DDoSProtection: bitget {"code":"429","msg":"Too Many Requests"}
+```
+
+**Constat** : Même avec 2 clés API, trop de requêtes simultanées.
+
+#### 2. Positions Invisibles après Ouverture
+
+**Symptôme** :
+- Ordres MARKET passent OK
+- `fetch_positions()` retourne vide après 5s
+- Retry 10× (30s total) échoue encore
+- Seulement certaines paires (DOGE, PEPE)
+
+**Erreur** :
+```
+❌ Impossible de récupérer positions après 10 tentatives!
+```
+
+**Hypothèse** : Lag API Bitget Paper Trading ou problème clé API 1
+
+#### 3. CheckScale Prix TP Variable par Paire
+
+**Problème** :
+- DOGE : checkScale=0 (integer, 0 décimales)
+- ETH : checkScale=2 (2 décimales)
+- Code utilisait `round(price, 5)` pour toutes
+
+**Erreur 40808** :
+```
+"trigger price checkBDScale error value=3889.63831 checkScale=2"
+```
+
+**Fix appliqué** :
+```python
+if current_price >= 100:
+    trigger_price_rounded = round(current_price, 2)  # ETH
+elif current_price >= 1:
+    trigger_price_rounded = round(current_price, 4)  # Mid-price
+else:
+    trigger_price_rounded = round(current_price, 5)  # DOGE
+```
+
+#### 4. Marges qui Explosent sur ETH
+
+**Problème** :
+- Marge configurée : $5
+- Bitget minimum : 0.01 contrats ETH
+- Bitget arrondit : Ouvre 2 contrats au lieu de 0.1
+- Après doublements : $1500+ marge
+
+**Calcul** :
+```
+$5 × 50x = $250 notional
+$250 ÷ $3900 = 0.064 contrats
+Bitget minimum = 0.01 mais ouvre 2 (???)
+→ Marge réelle : 2 × $3900 ÷ 50 = $156
+→ Après 3 doublements : $1248 marge
+```
+
+**Solution testée** : Calcul auto marge min par paire (fonction `calculate_min_margin()`)
+
+#### 5. Cleanup Positions Zombies
+
+**Problème** :
+- Erreur 22002 "No position to close" sur micro-positions
+- Bot s'arrête pour sécurité
+- Positions < 1 contrat bloquent le cleanup
+
+**Fix appliqué** :
+- ✅ Ignore erreur 22002 (position déjà fermée)
+- ✅ Ignore micro-positions < 1 contrat
+- ✅ Cleanup NON-BLOQUANT (continue même si incomplet)
+- ✅ Cleanup TOUT LE COMPTE (pas juste la paire de l'instance)
+
+### 📊 Tests Effectués (Résumé)
+
+| Configuration | Résultat | Raison |
+|--------------|----------|--------|
+| 6 paires (1 clé) | ❌ Crash | Rate limit 429 |
+| 4 paires (2 clés, 10s délai) | ❌ 2 crashent | Rate limit + positions invisibles |
+| 2 paires (PEPE + ETH) | ⚠️ PEPE crash | Positions jamais visibles |
+| 2 paires (DOGE + ETH) | ⚠️ DOGE crash | Positions jamais visibles |
+| ETH seul | ✅ Fonctionne | Mais marges explosent |
+| DOGE seul (V2_fixed Oracle) | ✅ Stable | En production depuis Session 4 |
+
+### 💡 Commits de la Session
+
+1. **5d48efd** - Deploy fixed version (integer size + exact API match)
+2. **c9bf410** - Paramètres optimisés (5 USDT, TP 0.5%, Fibo 0.3%)
+3. **3179052** - Cleanup auto + SEULEMENT 2 TP (corrigé après)
+4. **a2e4171** - Fix correct 6 ordres avec size correct
+5. **d8431df** - Fix handlers Fibo (size pas *2)
+6. **d9d36b1** - Update progress Session 4
+7. **99ec645** - Système multi-instances complet
+
+### 🔧 Améliorations Techniques Appliquées
+
+**Cleanup amélioré** :
+- Nettoie TOUT le compte (toutes paires)
+- Ignore erreur 22002 (No position to close)
+- Ignore micro-positions < 1
+- Non-bloquant (continue même si incomplet)
+- Retry loop 5×
+
+**Support multi-API** :
+- Argument `--api-key-id 1` ou `2`
+- Charge credentials selon ID
+- Répartition rate limits
+
+**Prix TP adaptatifs** :
+- checkScale automatique selon prix
+- ETH (>$100) : 2 décimales
+- Mid-price ($1-100) : 4 décimales
+- Low-price (<$1) : 5 décimales
+
+**Retry fetch_positions** :
+- 10 tentatives × 3s = 30s max
+- Gère lag API après ouverture positions
+
+**Calcul marge auto** :
+- Récupère limites via API
+- Calcule marge min selon pair + leverage
+- Facteur sécurité 3×
+
+### ⚠️ Problèmes Non Résolus
+
+1. **Rate Limits Bitget** :
+   - 4+ instances simultanées = Too Many Requests
+   - Même avec 2 clés API séparées
+   - Besoin réduire fréquence checks ou nombre paires
+
+2. **Positions Invisibles (DOGE/PEPE)** :
+   - `fetch_positions()` retourne vide après ouverture
+   - Spécifique à certaines paires
+   - Retry 10× (30s) échoue
+   - Fonctionne pour ETH, pas DOGE/PEPE
+
+3. **Marges ETH Explosent** :
+   - Bitget arrondit sizes au minimum
+   - 0.1 contrats calculés → 2 contrats ouverts
+   - Après doublements : $1500+ marge
+   - Besoin investigation tailles minimales réelles Bitget
+
+4. **Ordres TP Invisibles** :
+   - Plan Orders pas dans `fetch_open_orders()`
+   - Nécessite endpoint séparé (orders_plan_pending)
+   - Pas bloquant (détection TP = position disparue)
+
+### 🎓 Leçons Apprises
+
+1. **Rate limits Bitget très stricts** en Paper Trading
+   - 1-2 paires maximum viable avec checks 4×/sec
+   - Multi-instances nécessite délais importants (30s+)
+
+2. **CheckScale varie par paire** :
+   - ETH : 2 décimales
+   - DOGE : 5 décimales
+   - DOIT être adapté dynamiquement
+
+3. **Minimum sizes Bitget != documentation** :
+   - API dit min 0.01 ETH
+   - Réalité : Bitget arrondit au dessus
+   - Besoin tests réels par paire
+
+4. **API Key 1 vs API Key 2** :
+   - Comportements différents observés
+   - ETH (API Key 2) : Fonctionne
+   - DOGE/PEPE (API Key 1) : Positions invisibles
+   - Peut être coïncidence ou problème clé
+
+### 📍 Status Actuel
+
+**Local** : Tout arrêté (tests terminés)
+
+**Oracle Cloud** : Bot V2_fixed DOGE seul (depuis Session 4)
+- Session : Arrêtée avant tests multi-instances
+- Config : 5 USDT, TP 0.5%, Fibo 0.3%, 50x leverage
+
+**Code sur GitHub** : Commit 99ec645
+- Système multi-instances complet
+- 2 clés API support
+- Tous les fixes appliqués
+- Non déployé (tests non concluants)
+
+### 🚀 Prochaines Étapes
+
+**Immédiat** :
+1. Décider : Garder DOGE seul (V2_fixed) OU continuer multi-instances
+2. Si multi-instances : Investigation approfondie
+   - Pourquoi DOGE/PEPE positions invisibles ?
+   - Pourquoi marges ETH explosent ?
+   - Tests avec délais 30s+ entre lancements
+3. Si DOGE seul : Redéployer sur Oracle (Session 4 config)
+
+**Investigation demain** :
+- Tester Paper Trading vs Real Trading (behavior différent ?)
+- Contacter support Bitget sur rate limits
+- Analyser différences API Key 1 vs 2
+- Déterminer sizes minimales RÉELLES par paire
+
+**Améliorations futures** :
+- Marge adaptée automatiquement par paire ✅ (codé mais non testé)
+- Rate limit handling intelligent (backoff exponentiel)
+- Monitoring santé instances (auto-restart si crash)
+- Dashboard web pour voir toutes les paires
+
+---
+
+## 📜 Session 2025-10-20 (Session 4)
 
 **Date** : 2025-10-20 20:00-20:10 UTC
 **Focus** : Cleanup automatique + Fix taille ordres LIMIT
