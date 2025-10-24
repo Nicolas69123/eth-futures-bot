@@ -23,6 +23,7 @@ import ccxt
 import time
 import os
 import argparse
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -78,6 +79,15 @@ class BitgetHedgeBotV4:
 
         print(f"✅ API Key {api_key_id} loaded")
 
+        # Telegram credentials
+        self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+        if self.telegram_token and self.telegram_chat_id:
+            print(f"✅ Telegram configuré")
+        else:
+            print(f"⚠️  Telegram non configuré (fonctionne sans notifications)")
+
         # Exchange setup
         self.exchange = ccxt.bitget({
             'apiKey': self.api_key,
@@ -117,6 +127,27 @@ class BitgetHedgeBotV4:
         """Simple logging with timestamp"""
         timestamp = datetime.now().strftime('%H:%M:%S')
         print(f"[{timestamp}] [{self.pair_name}] {message}")
+
+    def send_telegram(self, message):
+        """Envoie message Telegram avec préfixe paire"""
+        if not self.telegram_token or not self.telegram_chat_id:
+            return False
+
+        # Préfixe avec nom de la paire
+        full_message = f"[{self.pair_name}] {message}"
+
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        data = {
+            "chat_id": self.telegram_chat_id,
+            "text": full_message,
+            "parse_mode": "HTML"
+        }
+
+        try:
+            response = requests.post(url, data=data, timeout=10)
+            return response.status_code == 200
+        except:
+            return False
 
     def cleanup_all(self):
         """Clean all positions and orders - WITH VERIFICATION"""
@@ -441,6 +472,11 @@ class BitgetHedgeBotV4:
             self.log(f"Total: 2 positions + 4 ordres")
             self.log("=" * 80)
 
+            # Notification Telegram
+            self.send_telegram(f"✅ <b>HEDGE OUVERT</b>\n"
+                             f"📊 LONG {real_pos['long']['size']:.0f} + SHORT {real_pos['short']['size']:.0f}\n"
+                             f"🎯 TP: {self.TP_PERCENT}% | Fibo: {self.FIBO_LEVELS[0]}%")
+
             return True
 
         except Exception as e:
@@ -592,11 +628,13 @@ class BitgetHedgeBotV4:
             if self.position.long_open and not real_pos.get('long'):
                 self.log("🎯 TP LONG HIT! Position fermée")
                 self.position.long_open = False
+                self.send_telegram("🎯 <b>TP LONG TOUCHÉ!</b>\n💰 Position fermée avec profit")
                 return 'tp_long'
 
             if self.position.short_open and not real_pos.get('short'):
                 self.log("🎯 TP SHORT HIT! Position fermée")
                 self.position.short_open = False
+                self.send_telegram("🎯 <b>TP SHORT TOUCHÉ!</b>\n💰 Position fermée avec profit")
                 return 'tp_short'
 
             # Detect Fibo hit (position size doubled)
@@ -604,6 +642,7 @@ class BitgetHedgeBotV4:
                 current_size = real_pos['long']['size']
                 if current_size > self.position.long_size_previous * 1.5:
                     self.log(f"📈 FIBO LONG HIT! Size: {self.position.long_size_previous} → {current_size}")
+                    self.send_telegram(f"📈 <b>FIBO LONG TOUCHÉ!</b>\n📊 Marge doublée (Niveau {self.position.long_fib_level + 1})")
                     self.position.long_size_previous = current_size
                     self.position.long_fib_level += 1
                     return 'fibo_long'
@@ -612,6 +651,7 @@ class BitgetHedgeBotV4:
                 current_size = real_pos['short']['size']
                 if current_size > self.position.short_size_previous * 1.5:
                     self.log(f"📉 FIBO SHORT HIT! Size: {self.position.short_size_previous} → {current_size}")
+                    self.send_telegram(f"📉 <b>FIBO SHORT TOUCHÉ!</b>\n📊 Marge doublée (Niveau {self.position.short_fib_level + 1})")
                     self.position.short_size_previous = current_size
                     self.position.short_fib_level += 1
                     return 'fibo_short'
@@ -813,12 +853,16 @@ class BitgetHedgeBotV4:
             # Open initial hedge
             if not self.open_initial_hedge():
                 self.log("❌ Échec ouverture hedge initial")
+                self.send_telegram("❌ <b>ERREUR DÉMARRAGE</b>\nÉchec ouverture hedge")
                 return
 
             # Initial state verification
             self.log("\n🔍 Vérification initiale état hedge...")
             time.sleep(3)
             self.verify_and_fix_state()
+
+            # Notification démarrage
+            self.send_telegram(f"🤖 <b>BOT DÉMARRÉ</b>\n✅ Monitoring actif (1 check/s)")
 
             self.log("\n🔄 BOUCLE DE MONITORING - 1 check/seconde")
             self.log("=" * 80)
