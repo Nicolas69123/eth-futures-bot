@@ -12,6 +12,8 @@ Déployé 24/7 sur Oracle Cloud (Marseille), notifications Telegram temps réel.
 
 ## 📚 Documentation Complète
 
+@.claude/auto-report.md     # 🔥 ANALYSE AUTO au démarrage
+
 @.claude/progress.md          # 🔥 Avancement & dernières actions
 @.claude/documentation.md     # 📖 Docs API (Bitget, Telegram, Fibonacci)
 @.claude/context.md           # Contexte détaillé du projet
