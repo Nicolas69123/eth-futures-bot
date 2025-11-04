@@ -397,9 +397,44 @@ class BitgetHedgeBotV5:
 
         return None
 
+    def flash_close_position(self, side):
+        """
+        FLASH CLOSE: Force close position using Bitget special endpoint
+        More reliable than regular market orders
+        """
+        symbol_bitget = self.PAIR.replace('/USDT:USDT', 'USDT')
+
+        try:
+            result = self.exchange.private_mix_post_v2_mix_order_close_positions({
+                'symbol': symbol_bitget,
+                'productType': 'USDT-FUTURES',
+                'holdSide': side
+            })
+
+            if result.get('code') == '00000':
+                self.log(f"     ⚡ Flash close {side.upper()} SUCCESS")
+                return True
+            else:
+                error_msg = result.get('msg', 'Unknown error')
+                if '22002' in str(result):
+                    self.log(f"     ⚠️  Position {side} déjà fermée (22002)")
+                    return True  # Already closed = success
+                else:
+                    self.log(f"     ❌ Flash close {side} failed: {error_msg}")
+                    return False
+
+        except Exception as e:
+            error_str = str(e)
+            if '22002' in error_str:
+                self.log(f"     ⚠️  Position {side} déjà fermée (22002)")
+                return True
+            else:
+                self.log(f"     ❌ Exception flash close {side}: {e}")
+                return False
+
     def cleanup_all(self):
-        """Clean all positions and orders - WITH VERIFICATION"""
-        self.log("🧹 Cleanup avec vérification...")
+        """Clean all positions and orders - WITH FLASH CLOSE"""
+        self.log("🧹 Cleanup avec FLASH CLOSE...")
 
         max_retries = 3
 
@@ -419,23 +454,22 @@ class BitgetHedgeBotV5:
                 # 2. Cancel all TP/SL orders
                 self.cancel_all_tpsl_orders()
 
-                # 3. Close all positions
+                # 3. FLASH CLOSE all positions (more reliable than market orders)
                 positions = self.exchange.fetch_positions(symbols=[self.PAIR])
+                closed_count = 0
                 for pos in positions:
                     size = float(pos.get('contracts', 0))
                     if size > 0:
                         side = pos.get('side', '').lower()
-                        self.log(f"  🔴 Fermeture {side.upper()}: {size} contrats")
+                        self.log(f"  🔴 Flash closing {side.upper()}: {size:.0f} contrats")
 
-                        market_side = 'sell' if side == 'long' else 'buy'
-                        self.exchange.create_order(
-                            symbol=self.PAIR,
-                            type='market',
-                            side=market_side,
-                            amount=size,
-                            params={'tradeSide': 'close', 'holdSide': side}
-                        )
+                        if self.flash_close_position(side):
+                            closed_count += 1
+
                         time.sleep(1)
+
+                if closed_count > 0:
+                    self.log(f"  ⚡ {closed_count} positions flash closed")
 
                 # 4. VERIFICATION FINALE
                 time.sleep(2)
