@@ -39,7 +39,7 @@ class BitgetHedgeFibonacciBot:
         self.API_KEY_ID = api_key_id
         self.TP_PERCENT = 0.1  # TP fixe à 0.1%
         self.FIBO_LEVELS = [0.1, 0.2, 0.4, 0.8, 1.6]  # Niveaux Fibonacci en %
-        self.INITIAL_MARGIN = 0.15  # Marge initiale en USD par position (augmentée pour garantir > 5 USDT)
+        self.INITIAL_MARGIN = 0.11  # Marge initiale ($0.11 * 50 = $5.5 notional > $5 minimum)
         self.LEVERAGE = 50
 
         # Logging pour debug
@@ -309,11 +309,15 @@ class BitgetHedgeFibonacciBot:
             current_price = float(ticker['last'])
             logger.info(f"Prix actuel: ${current_price:.5f}")
 
-            # Calculer la taille
-            notional = (self.INITIAL_MARGIN * self.LEVERAGE) / current_price
-            size = round(notional * current_price)
+            # Calculer la taille CORRECTEMENT
+            notional_usd = self.INITIAL_MARGIN * self.LEVERAGE  # Notional en USDT
+            size = round(notional_usd / current_price)  # Nombre de contrats
 
-            logger.info(f"Size calculée: {size} contrats (${self.INITIAL_MARGIN * self.LEVERAGE:.1f} notional)")
+            # Vérification du calcul
+            actual_notional = size * current_price
+            logger.info(f"Size calculée: {size} contrats")
+            logger.info(f"Notional visé: ${notional_usd:.2f} USDT")
+            logger.info(f"Notional réel: ${actual_notional:.2f} USDT")
 
             # 1. Ouvrir LONG
             logger.info("\n[1/6] Ouverture LONG MARKET...")
