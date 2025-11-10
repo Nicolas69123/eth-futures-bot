@@ -1,0 +1,100 @@
+{
+  "config": {
+    "capital": 100,
+    "margin": 0.05,
+    "leverage": 50,
+    "tp_percent": 0.5,
+    "fibo_levels": [
+      0.8,
+      1.6,
+      3.2,
+      6.4,
+      12.8
+    ]
+  },
+  "results": {
+    "final_equity": 103.83300000000041,
+    "total_return": 3.8330000000004105,
+    "max_drawdown": 0.0,
+    "total_trades": 919,
+    "tp_hits": 459,
+    "fibo_hits": 0
+  },
+  "trades": [
+    {
+      "timestamp": "2025-11-10 09:30:00",
+      "type": "TP_LONG",
+      "price": 0.18341,
+      "size": 13.731736790069208,
+      "profit": 0.0125,
+      "commission": 0.0013750000000000001
+    },
+    {
+      "timestamp": "2025-11-10 09:30:00",
+      "type": "OPEN_HEDGE",
+      "price": 0.18341,
+      "size": 27.261327081402325,
+      "commission": 0.0027500000000000003
+    },
+    {
+      "timestamp": "2025-11-10 10:30:00",
+      "type": "TP_SHORT",
+      "price": 0.18249,
+      "size": 13.630663540701162,
+      "profit": 0.0125,
+      "commission": 0.0013750000000000001
+    },
+    {
+      "timestamp": "2025-11-10 10:30:00",
+      "type": "OPEN_HEDGE",
+      "price": 0.18249,
+      "size": 27.398761575976764,
+      "commission": 0.0027500000000000003
+    },
+    {
+      "timestamp": "2025-11-10 11:00:00",
+      "type": "TP_LONG",
+      "price": 0.1835,
+      "size": 13.699380787988382,
+      "profit": 0.0125,
+      "commission": 0.0013750000000000001
+    },
+    {
+      "timestamp": "2025-11-10 11:00:00",
+      "type": "OPEN_HEDGE",
+      "price": 0.1835,
+      "size": 27.247956403269754,
+      "commission": 0.0027500000000000003
+    },
+    {
+      "timestamp": "2025-11-10 12:00:00",
+      "type": "TP_SHORT",
+      "price": 0.18221,
+      "size": 13.623978201634877,
+      "profit": 0.0125,
+      "commission": 0.0013750000000000001
+    },
+    {
+      "timestamp": "2025-11-10 12:00:00",
+      "type": "OPEN_HEDGE",
+      "price": 0.18221,
+      "size": 27.440864936062784,
+      "commission": 0.0027500000000000003
+    },
+    {
+      "timestamp": "2025-11-10 13:30:00",
+      "type": "TP_LONG",
+      "price": 0.1832,
+      "size": 13.720432468031392,
+      "profit": 0.0125,
+      "commission": 0.0013750000000000001
+    },
+    {
+      "timestamp": "2025-11-10 13:30:00",
+      "type": "OPEN_HEDGE",
+      "price": 0.1832,
+      "size": 27.292576419213972,
+      "commission": 0.0027500000000000003
+    }
+  ]
+}
