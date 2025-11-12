@@ -8,6 +8,7 @@ Adaptation automatique aux minimums de l'exchange
 import ccxt
 import time
 import logging
+import requests
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import os
@@ -284,6 +285,10 @@ class FibonacciBot:
         # Mapping symbol → api_key_id pour le monitoring
         self.pair_to_api = {p['symbol']: p['api_key_id'] for p in self.PAIRS}
 
+        # Telegram credentials
+        self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
         # Logging
         self.setup_logging()
 
@@ -333,6 +338,24 @@ class FibonacciBot:
         logging.info(f"📁 Logs INFO: {log_file}")
         logging.info(f"🔍 Logs DEBUG: {debug_file}")
         logging.debug("DEBUG MODE ACTIVÉ - Logs détaillés dans le fichier debug")
+
+    def send_telegram(self, message: str):
+        """Envoie message Telegram"""
+        if not self.telegram_token or not self.telegram_chat_id:
+            return False
+
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        data = {
+            "chat_id": self.telegram_chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+
+        try:
+            response = requests.post(url, data=data, timeout=10)
+            return response.status_code == 200
+        except:
+            return False
 
     def connect_exchange(self, api_key_id: int):
         """Connexion à l'exchange avec la clé API spécifiée"""
@@ -805,6 +828,9 @@ class FibonacciBot:
                             logging.info(f"   Taille attendue: {expected['size']:.0f} → Actuelle: 0")
                             logging.info(f"   ➡️  ACTION: Rouvrir position + TP + Fibonacci")
 
+                            # Message Telegram
+                            self.send_telegram(f"🎯 <b>TP EXÉCUTÉ</b>\n{symbol} {side.upper()}\nTaille: {expected['size']:.0f} contrats fermés")
+
                             # Rouvrir position
                             position_obj = self.positions[symbol][side]
                             current_price = exchange.fetch_ticker(symbol)['last']
@@ -821,9 +847,13 @@ class FibonacciBot:
                             fibo_obj.place()
                             logging.info(f"   ✅ Fibonacci replacé")
 
+                            # Message Telegram confirmation
+                            self.send_telegram(f"✅ Position {side.upper()} rouverte\n{position_obj.size:.0f} @ ${current_price:.8f}\nTP + Fibo replacés")
+
                             # Mettre à jour état attendu
                             expected_state[symbol][side] = {
                                 'size': position_obj.size,
+                                'entry_price': position_obj.entry_price,
                                 'has_tp': True,
                                 'has_fibo': True
                             }
@@ -835,6 +865,9 @@ class FibonacciBot:
                             logging.info(f"   Taille: {expected['size']:.0f} → {current['size']:.0f}")
                             logging.info(f"   Prix moyen: ${expected.get('entry_price', 0):.8f} → ${current['entry']:.8f}")
                             logging.info(f"   ➡️  ACTION: Replacer TP + Fibonacci (anciens TP auto-annulés par Bitget)")
+
+                            # Message Telegram
+                            self.send_telegram(f"📊 <b>FIBONACCI EXÉCUTÉ</b>\n{symbol} {side.upper()}\nTaille: {expected['size']:.0f} → {current['size']:.0f}\nPrix moyen: ${current['entry']:.5f}")
 
                             # Mettre à jour position avec NOUVEAU prix moyen d'achat
                             position_obj = self.positions[symbol][side]
@@ -929,6 +962,10 @@ class FibonacciBot:
             logging.info("🔌 Connexion aux exchanges...")
             for pair_config in self.PAIRS:
                 self.connect_exchange(pair_config['api_key_id'])
+
+            # Message Telegram démarrage
+            pairs_list = ", ".join([p['symbol'].split('/')[0] for p in self.PAIRS])
+            self.send_telegram(f"🚀 <b>BOT DÉMARRÉ</b>\nFibonacci Bot OOP\nPaires: {pairs_list}\nTP: 0.5% | Fibo: 0.5%")
 
             # Cleanup COMPLET
             self.complete_cleanup()
