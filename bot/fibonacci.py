@@ -875,31 +875,36 @@ class FibonacciBot:
                             position_obj.entry_price = current['entry']
 
                             # RETRY LOOP: Placer nouveau TP jusqu'à confirmation
+                            # Note: Attendre que position soit settled (erreur 43023 sinon)
                             tp_placed = False
-                            for attempt in range(10):  # Max 10 tentatives
+                            for attempt in range(15):  # Max 15 tentatives
                                 try:
+                                    # Attendre progressivement plus longtemps
+                                    wait_time = 2 + (attempt * 0.5)  # 2s, 2.5s, 3s, 3.5s...
+                                    if attempt > 0:
+                                        time.sleep(wait_time)
+
                                     tp_obj = OrderTakeProfit(exchange, symbol, position_obj, self.TP_PERCENT)
                                     tp_obj.place()
 
                                     # Vérifier que le TP est bien placé
-                                    time.sleep(0.5)
+                                    time.sleep(1)
                                     tp_orders = exchange.fetch_open_orders(symbol, params={'trigger': True, 'planType': 'profit_loss'})
                                     for order in tp_orders:
                                         if abs(float(order.get('triggerPrice', 0)) - tp_obj.price) < 0.0001:
-                                            logging.info(f"   ✅ Nouveau TP confirmé @ {tp_obj.price:.8f} (prix moyen ${position_obj.entry_price:.8f} + 0.5%)")
+                                            logging.info(f"   ✅ Nouveau TP confirmé @ {tp_obj.price:.8f} après {attempt+1} tentatives")
                                             tp_placed = True
                                             break
                                     if tp_placed:
                                         break
                                 except Exception as e:
-                                    if attempt < 9:
-                                        logging.debug(f"   ⚠️ Tentative {attempt+1}/10 TP échouée, retry...")
-                                        time.sleep(0.5)
+                                    if attempt < 14:
+                                        logging.debug(f"   ⚠️ Tentative {attempt+1}/15 TP échouée: {str(e)[:60]}")
                                     else:
-                                        logging.warning(f"   ⚠️ TP non placé après 10 tentatives: {e}")
+                                        logging.warning(f"   ⚠️ TP non placé après 15 tentatives: {e}")
 
                             if not tp_placed:
-                                logging.warning(f"   → L'ancien TP reste actif")
+                                logging.warning(f"   → L'ancien TP reste actif (erreur 43023 persistante)")
 
                             # RETRY LOOP: Replacer nouveau Fibonacci jusqu'à confirmation
                             current_market_price = exchange.fetch_ticker(symbol)['last']
